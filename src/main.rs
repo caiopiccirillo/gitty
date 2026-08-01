@@ -5,12 +5,11 @@ use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
 
 use gitiff::app::App;
-use gitiff::{git, ui};
+use gitiff::ui;
 
 fn main() -> Result<()> {
     let path = PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| ".".into()));
-    let diff = git::load_workdir_diff(&path)?;
-    let mut app = App::new(diff);
+    let mut app = App::load(&path)?;
 
     let mut terminal = ratatui::init();
     let result = run(&mut terminal, &mut app);

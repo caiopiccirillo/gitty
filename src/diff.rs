@@ -2,8 +2,7 @@
 //!
 //! The diff is stored as a flat list of lines (easy to render and scroll),
 //! but every line keeps track of the file and hunk it belongs to. Those
-//! indices will become the identity we use when stage/unstage of individual
-//! hunks is implemented.
+//! indices are the identity we use when staging/unstaging individual hunks.
 
 use std::ops::Range;
 
@@ -32,6 +31,23 @@ pub struct HunkId {
     pub hunk_idx: usize,
 }
 
+/// What kind of change a file went through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileStatus {
+    Added,
+    Deleted,
+    Modified,
+    Renamed,
+    TypeChange,
+}
+
+/// Per-file metadata, parallel to the `file_idx` tags on the lines.
+#[derive(Debug, Clone)]
+pub struct FileInfo {
+    pub path: String,
+    pub status: FileStatus,
+}
+
 /// One displayable line of the diff.
 #[derive(Debug, Clone)]
 pub struct DiffLine {
@@ -46,12 +62,11 @@ pub struct DiffLine {
     pub hunk_idx: Option<usize>,
 }
 
-/// A full diff as a flat list of lines.
+/// A full diff as a flat list of lines plus per-file metadata.
 #[derive(Debug, Default)]
 pub struct DiffView {
     pub lines: Vec<DiffLine>,
-    /// Number of files touched by the diff.
-    pub file_count: usize,
+    pub files: Vec<FileInfo>,
 }
 
 impl DiffView {
@@ -92,8 +107,23 @@ impl DiffView {
             .unwrap_or(self.lines.len());
         Some(start..end)
     }
+
+    /// Range of line indices occupied by a file, starting at its header.
+    pub fn file_line_range(&self, file_idx: usize) -> Option<Range<usize>> {
+        if file_idx >= self.files.len() {
+            return None;
+        }
+        let start = self.lines.iter().position(|l| l.file_idx == file_idx)?;
+        let end = self.lines[start..]
+            .iter()
+            .position(|l| l.file_idx != file_idx)
+            .map(|offset| start + offset)
+            .unwrap_or(self.lines.len());
+        Some(start..end)
+    }
 }
 
+/// Test fixture: two files, the first with one hunk, the second with two.
 #[cfg(test)]
 pub(crate) fn two_file_view() -> DiffView {
     let line = |kind: LineKind, file_idx: usize, hunk_idx: Option<usize>| DiffLine {
@@ -113,7 +143,16 @@ pub(crate) fn two_file_view() -> DiffView {
             line(LineKind::HunkHeader, 1, Some(1)),
             line(LineKind::Deletion, 1, Some(1)),
         ],
-        file_count: 2,
+        files: vec![
+            FileInfo {
+                path: "a.txt".into(),
+                status: FileStatus::Modified,
+            },
+            FileInfo {
+                path: "b.txt".into(),
+                status: FileStatus::Modified,
+            },
+        ],
     }
 }
 
@@ -174,5 +213,13 @@ mod tests {
             }),
             None
         );
+    }
+
+    #[test]
+    fn reports_file_line_ranges() {
+        let view = two_file_view();
+        assert_eq!(view.file_line_range(0), Some(0..3));
+        assert_eq!(view.file_line_range(1), Some(3..8));
+        assert_eq!(view.file_line_range(2), None);
     }
 }
