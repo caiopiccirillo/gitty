@@ -4,12 +4,14 @@
 //! hunks of the selected file, and a per-line cursor inside the diff (right
 //! pane). The hunk under the cursor is the target of stage/unstage.
 
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::widgets::ListState;
 
-use crate::diff::{DiffLine, DiffView, HunkId, LineKind};
+use crate::diff::{DiffLine, DiffView, FileInfo, HunkId, LineKind};
 use crate::git;
 
 /// Which side of the staging area is shown.
@@ -33,6 +35,9 @@ pub struct App {
     pub focus: Focus,
     /// Selected file index within the current tab's file list.
     pub selected_file: usize,
+    /// Scroll state of the files pane; ratatui manages the offset so the
+    /// selection stays visible in long lists.
+    pub files_state: ListState,
     /// Cursor line within the selected file's displayed diff.
     pub cursor: usize,
     /// Scroll offset of the diff pane, relative to the displayed lines.
@@ -61,6 +66,7 @@ impl App {
             tab: Tab::Unstaged,
             focus: Focus::Files,
             selected_file: 0,
+            files_state: ListState::default().with_selected(Some(0)),
             cursor: 0,
             scroll: 0,
             message: None,
@@ -120,6 +126,26 @@ impl App {
         });
     }
 
+    /// Stage the whole selected file (files pane, unstaged tab).
+    pub fn stage_selected_file(&mut self) {
+        self.with_file("stage", git::stage_file);
+    }
+
+    /// Unstage the whole selected file (files pane, staged tab).
+    pub fn unstage_selected_file(&mut self) {
+        self.with_file("unstage", git::unstage_file);
+    }
+
+    fn with_file(&mut self, verb: &str, op: impl FnOnce(&Path, &FileInfo) -> Result<()>) {
+        let Some(file) = self.current_diff().files.get(self.selected_file).cloned() else {
+            return;
+        };
+        self.message = match op(&self.repo_path, &file).and_then(|()| self.reload()) {
+            Ok(()) => None,
+            Err(e) => Some(format!("{verb} failed: {e}")),
+        };
+    }
+
     fn with_hunk(&mut self, verb: &str, op: impl FnOnce(&Path, HunkId) -> Result<()>) {
         let Some(hunk) = self.current_hunk() else {
             self.message = Some("no hunk under the cursor".into());
@@ -138,6 +164,7 @@ impl App {
         self.staged = git::load_staged_diff(&self.repo_path)?;
         let len = self.current_diff().files.len();
         self.selected_file = len.saturating_sub(1).min(self.selected_file);
+        self.files_state.select(Some(self.selected_file));
         if len == 0 {
             self.focus = Focus::Files;
         }
@@ -175,6 +202,10 @@ impl App {
             {
                 self.focus = Focus::Diff;
             }
+            KeyCode::Char(' ') => match self.tab {
+                Tab::Unstaged => self.stage_selected_file(),
+                Tab::Staged => self.unstage_selected_file(),
+            },
             _ => {}
         }
     }
@@ -192,11 +223,11 @@ impl App {
                 self.move_cursor(-(self.viewport_height as isize / 2));
             }
             (_, KeyCode::Home) | (_, KeyCode::Char('g')) => {
-                self.cursor = 0;
+                self.cursor = self.current_hunk_bounds().start;
                 self.clamp_cursor();
             }
             (_, KeyCode::End) | (_, KeyCode::Char('G')) => {
-                self.cursor = self.display_lines().len().saturating_sub(1);
+                self.cursor = self.current_hunk_bounds().end.saturating_sub(1);
                 self.clamp_cursor();
             }
             (_, KeyCode::Char('n')) => self.jump_hunk(1),
@@ -221,6 +252,7 @@ impl App {
 
     fn select_file(&mut self, idx: usize) {
         self.selected_file = idx;
+        self.files_state.select(Some(idx));
         self.cursor = 0;
         self.scroll = 0;
     }
@@ -234,13 +266,39 @@ impl App {
         self.select_file(next as usize);
     }
 
+    /// Move the cursor within its hunk; line-wise movement never crosses
+    /// hunk boundaries (n/p are for moving between hunks).
     fn move_cursor(&mut self, delta: isize) {
-        let len = self.display_lines().len();
-        if len == 0 {
+        let bounds = self.current_hunk_bounds();
+        if bounds.is_empty() {
             return;
         }
-        self.cursor = (self.cursor as isize + delta).clamp(0, len as isize - 1) as usize;
+        self.cursor = (self.cursor as isize + delta)
+            .clamp(bounds.start as isize, bounds.end as isize - 1) as usize;
         self.clamp_cursor();
+    }
+
+    /// Display-line range of the hunk the cursor is in: from its `@@` header
+    /// to just before the next header (or the end of the file).
+    fn current_hunk_bounds(&self) -> Range<usize> {
+        let len = self.display_lines().len();
+        if len == 0 {
+            return 0..0;
+        }
+        let cursor = self.cursor.min(len - 1);
+        let start = self.display_lines()[..=cursor]
+            .iter()
+            .rposition(|l| l.kind == LineKind::HunkHeader)
+            .unwrap_or(0);
+        let end = self
+            .display_lines()
+            .iter()
+            .enumerate()
+            .skip(start + 1)
+            .find(|(_, l)| l.kind == LineKind::HunkHeader)
+            .map(|(i, _)| i)
+            .unwrap_or(len);
+        start..end
     }
 
     /// Move the cursor to the next/previous hunk header within the file.
@@ -384,15 +442,33 @@ mod tests {
     }
 
     #[test]
+    fn cursor_is_confined_to_the_hunk() {
+        let mut app = test_app();
+        // File 1 displays: [hunk0 header, context | hunk1 header, deletion].
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.cursor, 1);
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.cursor, 1, "j stops at the end of the hunk");
+        press(&mut app, KeyCode::Char('n'));
+        assert_eq!(app.cursor, 2);
+        press(&mut app, KeyCode::Char('k'));
+        assert_eq!(app.cursor, 2, "k stops at the start of the hunk");
+    }
+
+    #[test]
     fn scroll_follows_the_cursor() {
         let mut app = test_app();
         app.set_viewport_height(1);
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('n'));
         press(&mut app, KeyCode::Char('G'));
-        assert_eq!(app.cursor, 3);
+        assert_eq!(app.cursor, 3, "G goes to the end of the current hunk");
         assert_eq!(app.scroll, 3);
         press(&mut app, KeyCode::Char('g'));
-        assert_eq!(app.scroll, 0);
+        assert_eq!(app.cursor, 2, "g goes to the start of the current hunk");
+        assert_eq!(app.scroll, 2);
     }
 }

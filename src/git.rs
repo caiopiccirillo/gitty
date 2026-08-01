@@ -52,6 +52,40 @@ pub fn unstage_hunk(path: &Path, file_idx: usize, hunk_idx: usize) -> Result<()>
     apply_hunk_to_index(&repo, &diff, file_idx, hunk_idx)
 }
 
+/// Stage a whole file (like `git add <path>`). A deleted file is staged by
+/// removing it from the index.
+pub fn stage_file(path: &Path, file: &FileInfo) -> Result<()> {
+    let repo = open_repo(path)?;
+    let mut index = repo.index()?;
+    let file_path = Path::new(&file.path);
+    match file.status {
+        FileStatus::Deleted => index.remove_path(file_path)?,
+        _ => index.add_path(file_path)?,
+    }
+    index.write()?;
+    Ok(())
+}
+
+/// Unstage a whole file (like `git reset HEAD -- <path>`). On an unborn
+/// branch there is no HEAD to reset to, so the index entry is simply
+/// dropped and the file becomes untracked again.
+pub fn unstage_file(path: &Path, file: &FileInfo) -> Result<()> {
+    let repo = open_repo(path)?;
+    match repo.head() {
+        Ok(head) => {
+            let commit = head.peel_to_commit()?;
+            repo.reset_default(Some(commit.as_object()), [file.path.as_str()])?;
+        }
+        Err(e) if e.code() == git2::ErrorCode::UnbornBranch => {
+            let mut index = repo.index()?;
+            index.remove_path(Path::new(&file.path))?;
+            index.write()?;
+        }
+        Err(e) => return Err(e.into()),
+    }
+    Ok(())
+}
+
 fn open_repo(path: &Path) -> Result<Repository> {
     Repository::discover(path)
         .with_context(|| format!("no git repository found at or above {}", path.display()))

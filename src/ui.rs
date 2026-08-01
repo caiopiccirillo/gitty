@@ -6,7 +6,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, List, ListItem, Paragraph},
+    widgets::{Block, HighlightSpacing, List, ListItem, Paragraph},
 };
 
 use crate::app::{App, Focus, Tab};
@@ -25,15 +25,30 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     frame.render_widget(status_bar(app), status_area);
 }
 
-fn render_files(frame: &mut Frame, app: &App, area: Rect) {
-    let diff = app.current_diff();
-    let title = match app.tab {
-        Tab::Unstaged => format!(" Unstaged ({}) ", diff.files.len()),
-        Tab::Staged => format!(" Staged ({}) ", diff.files.len()),
+fn render_files(frame: &mut Frame, app: &mut App, area: Rect) {
+    let focused = app.focus == Focus::Files;
+    let (title, items) = {
+        let diff = app.current_diff();
+        let title = match app.tab {
+            Tab::Unstaged => format!(" Unstaged ({}) ", diff.files.len()),
+            Tab::Staged => format!(" Staged ({}) ", diff.files.len()),
+        };
+        let items: Vec<ListItem> = diff
+            .files
+            .iter()
+            .map(|file| {
+                let (letter, color) = status_badge(file.status);
+                ListItem::new(Line::from(vec![
+                    Span::styled(format!("{letter} "), Style::new().fg(color)),
+                    Span::raw(file.path.clone()),
+                ]))
+            })
+            .collect();
+        (title, items)
     };
-    let block = pane_block(title, app.focus == Focus::Files);
+    let block = pane_block(title, focused);
 
-    if diff.files.is_empty() {
+    if items.is_empty() {
         let empty = Paragraph::new("no changes")
             .style(Style::new().fg(Color::DarkGray))
             .block(block);
@@ -41,25 +56,13 @@ fn render_files(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let items: Vec<ListItem> = diff
-        .files
-        .iter()
-        .enumerate()
-        .map(|(i, file)| {
-            let (letter, color) = status_badge(file.status);
-            let row = Line::from(vec![
-                Span::styled(format!("{letter} "), Style::new().fg(color)),
-                Span::raw(file.path.clone()),
-            ]);
-            let style = if i == app.selected_file {
-                Style::new().bg(Color::DarkGray)
-            } else {
-                Style::new()
-            };
-            ListItem::new(row).style(style)
-        })
-        .collect();
-    frame.render_widget(List::new(items).block(block), area);
+    // Stateful rendering keeps the selection visible by scrolling the list.
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(Style::new().bg(Color::DarkGray))
+        .highlight_symbol("")
+        .highlight_spacing(HighlightSpacing::Never);
+    frame.render_stateful_widget(list, area, &mut app.files_state);
 }
 
 fn render_diff(frame: &mut Frame, app: &App, area: Rect) {
@@ -136,7 +139,8 @@ fn status_bar(app: &App) -> Paragraph<'static> {
 
 fn hints(app: &App) -> &'static str {
     match (app.focus, app.tab) {
-        (Focus::Files, _) => " Tab switch · j/k file · Enter diff · q quit ",
+        (Focus::Files, Tab::Unstaged) => " Tab · j/k file · space stage · Enter diff · q quit ",
+        (Focus::Files, Tab::Staged) => " Tab · j/k file · space unstage · Enter diff · q quit ",
         (Focus::Diff, Tab::Unstaged) => " j/k line · n/p hunk · s stage · h back · q quit ",
         (Focus::Diff, Tab::Staged) => " j/k line · n/p hunk · u unstage · h back · q quit ",
     }
@@ -265,6 +269,35 @@ mod tests {
         // the addition the cursor is on.
         assert_eq!(buffer[(25, 2)].bg, Color::DarkGray);
         assert_ne!(buffer[(25, 1)].bg, Color::DarkGray);
+    }
+
+    #[test]
+    fn file_list_scrolls_to_keep_the_selection_visible() {
+        let view = DiffView {
+            lines: (0..30)
+                .map(|i| DiffLine {
+                    kind: LineKind::FileHeader,
+                    content: format!("diff --git a/f{i:02} b/f{i:02}"),
+                    file_idx: i,
+                    hunk_idx: None,
+                })
+                .collect(),
+            files: (0..30)
+                .map(|i| FileInfo {
+                    path: format!("f{i:02}.txt"),
+                    status: FileStatus::Modified,
+                })
+                .collect(),
+        };
+        let mut app = App::new(view, DiffView::default(), PathBuf::from("/unused"));
+        for _ in 0..25 {
+            press(&mut app, KeyCode::Char('j'));
+        }
+        assert_eq!(app.selected_file, 25);
+        // Height 10 -> the list shows at most 7 rows, far from the top.
+        let (screen, _) = render_app(&mut app, 80, 10);
+        assert!(screen.contains("f25.txt"), "selected file stays visible");
+        assert!(!screen.contains("f00.txt"), "top of the list scrolled away");
     }
 
     #[test]

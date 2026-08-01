@@ -6,7 +6,9 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use gitiff::app::{App, Focus};
 use gitiff::diff::{FileStatus, LineKind};
-use gitiff::git::{load_staged_diff, load_unstaged_diff, stage_hunk, unstage_hunk};
+use gitiff::git::{
+    load_staged_diff, load_unstaged_diff, stage_file, stage_hunk, unstage_file, unstage_hunk,
+};
 
 const BASE: &str = "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\n";
 
@@ -99,6 +101,71 @@ fn unstages_a_newly_added_file_on_an_unborn_branch() {
     assert!(load_staged_diff(dir.path()).unwrap().files.is_empty());
     // Back to untracked, still on disk.
     assert!(dir.path().join("new.txt").exists());
+}
+
+#[test]
+fn stages_and_unstages_a_whole_file() {
+    let (dir, _) = repo_with_two_hunks();
+    let file = load_unstaged_diff(dir.path()).unwrap().files[0].clone();
+
+    stage_file(dir.path(), &file).unwrap();
+    assert!(load_unstaged_diff(dir.path()).unwrap().files.is_empty());
+    assert_eq!(load_staged_diff(dir.path()).unwrap().hunks().len(), 2);
+
+    let staged_file = load_staged_diff(dir.path()).unwrap().files[0].clone();
+    unstage_file(dir.path(), &staged_file).unwrap();
+    assert!(load_staged_diff(dir.path()).unwrap().files.is_empty());
+    assert_eq!(load_unstaged_diff(dir.path()).unwrap().hunks().len(), 2);
+}
+
+#[test]
+fn stages_a_deleted_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(dir.path()).unwrap();
+    commit_file(&repo, dir.path(), "f.txt", BASE);
+    fs::remove_file(dir.path().join("f.txt")).unwrap();
+
+    let view = load_unstaged_diff(dir.path()).unwrap();
+    assert_eq!(view.files[0].status, FileStatus::Deleted);
+    stage_file(dir.path(), &view.files[0]).unwrap();
+
+    let staged = load_staged_diff(dir.path()).unwrap();
+    assert_eq!(staged.files.len(), 1);
+    assert_eq!(staged.files[0].status, FileStatus::Deleted);
+    assert!(load_unstaged_diff(dir.path()).unwrap().files.is_empty());
+}
+
+#[test]
+fn unstages_a_file_on_an_unborn_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(dir.path()).unwrap();
+    fs::write(dir.path().join("new.txt"), "hello\n").unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(Path::new("new.txt")).unwrap();
+    index.write().unwrap();
+
+    let staged = load_staged_diff(dir.path()).unwrap();
+    assert_eq!(staged.files[0].status, FileStatus::Added);
+    unstage_file(dir.path(), &staged.files[0]).unwrap();
+    assert!(load_staged_diff(dir.path()).unwrap().files.is_empty());
+    assert!(dir.path().join("new.txt").exists());
+}
+
+#[test]
+fn app_stages_a_file_from_the_files_pane() {
+    let (dir, _) = repo_with_two_hunks();
+    let mut app = App::load(dir.path()).unwrap();
+
+    app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+    assert_eq!(app.message, None);
+    assert!(app.unstaged.files.is_empty());
+    assert_eq!(app.staged.files.len(), 1);
+
+    app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+    assert_eq!(app.message, None);
+    assert!(app.staged.files.is_empty());
+    assert_eq!(app.unstaged.files.len(), 1);
 }
 
 #[test]
