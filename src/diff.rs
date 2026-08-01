@@ -5,6 +5,8 @@
 //! indices will become the identity we use when stage/unstage of individual
 //! hunks is implemented.
 
+use std::ops::Range;
+
 /// The kind of a single line in a diff.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineKind {
@@ -20,6 +22,14 @@ pub enum LineKind {
     Context,
     /// Meta lines such as "\ No newline at end of file" or binary markers.
     Meta,
+}
+
+/// Identity of a hunk: which file it belongs to and its index within the file.
+/// Orders in display order (first by file, then by hunk).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct HunkId {
+    pub file_idx: usize,
+    pub hunk_idx: usize,
 }
 
 /// One displayable line of the diff.
@@ -51,5 +61,118 @@ impl DiffView {
 
     pub fn len(&self) -> usize {
         self.lines.len()
+    }
+
+    /// All hunks in display order.
+    pub fn hunks(&self) -> Vec<HunkId> {
+        let mut hunks = Vec::new();
+        for line in &self.lines {
+            if let Some(hunk_idx) = line.hunk_idx {
+                let id = HunkId {
+                    file_idx: line.file_idx,
+                    hunk_idx,
+                };
+                if hunks.last() != Some(&id) {
+                    hunks.push(id);
+                }
+            }
+        }
+        hunks
+    }
+
+    /// Range of line indices occupied by a hunk, starting at its `@@` header.
+    pub fn hunk_line_range(&self, id: HunkId) -> Option<Range<usize>> {
+        let belongs =
+            |line: &DiffLine| line.file_idx == id.file_idx && line.hunk_idx == Some(id.hunk_idx);
+        let start = self.lines.iter().position(&belongs)?;
+        let end = self.lines[start..]
+            .iter()
+            .position(|line| !belongs(line))
+            .map(|offset| start + offset)
+            .unwrap_or(self.lines.len());
+        Some(start..end)
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn two_file_view() -> DiffView {
+    let line = |kind: LineKind, file_idx: usize, hunk_idx: Option<usize>| DiffLine {
+        kind,
+        content: String::new(),
+        file_idx,
+        hunk_idx,
+    };
+    DiffView {
+        lines: vec![
+            line(LineKind::FileHeader, 0, None),
+            line(LineKind::HunkHeader, 0, Some(0)),
+            line(LineKind::Addition, 0, Some(0)),
+            line(LineKind::FileHeader, 1, None),
+            line(LineKind::HunkHeader, 1, Some(0)),
+            line(LineKind::Context, 1, Some(0)),
+            line(LineKind::HunkHeader, 1, Some(1)),
+            line(LineKind::Deletion, 1, Some(1)),
+        ],
+        file_count: 2,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lists_hunks_in_display_order() {
+        let view = two_file_view();
+        assert_eq!(
+            view.hunks(),
+            vec![
+                HunkId {
+                    file_idx: 0,
+                    hunk_idx: 0
+                },
+                HunkId {
+                    file_idx: 1,
+                    hunk_idx: 0
+                },
+                HunkId {
+                    file_idx: 1,
+                    hunk_idx: 1
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn reports_hunk_line_ranges() {
+        let view = two_file_view();
+        assert_eq!(
+            view.hunk_line_range(HunkId {
+                file_idx: 0,
+                hunk_idx: 0
+            }),
+            Some(1..3)
+        );
+        assert_eq!(
+            view.hunk_line_range(HunkId {
+                file_idx: 1,
+                hunk_idx: 0
+            }),
+            Some(4..6)
+        );
+        assert_eq!(
+            view.hunk_line_range(HunkId {
+                file_idx: 1,
+                hunk_idx: 1
+            }),
+            Some(6..8)
+        );
+        assert_eq!(
+            view.hunk_line_range(HunkId {
+                file_idx: 9,
+                hunk_idx: 0
+            }),
+            None
+        );
     }
 }

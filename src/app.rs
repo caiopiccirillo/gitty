@@ -2,12 +2,14 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::diff::DiffView;
+use crate::diff::{DiffView, HunkId};
 
 pub struct App {
     pub diff: DiffView,
     /// First visible line (top of the viewport).
     pub scroll: usize,
+    /// Hunk currently selected with n/p, if any.
+    pub selected_hunk: Option<HunkId>,
     /// Height of the diff viewport in lines, updated on every render/resize.
     viewport_height: usize,
     pub should_quit: bool,
@@ -18,6 +20,7 @@ impl App {
         Self {
             diff,
             scroll: 0,
+            selected_hunk: None,
             viewport_height: 0,
             should_quit: false,
         }
@@ -58,7 +61,52 @@ impl App {
             }
             (_, KeyCode::Home) | (_, KeyCode::Char('g')) => self.scroll = 0,
             (_, KeyCode::End) | (_, KeyCode::Char('G')) => self.scroll = self.max_scroll(),
+            (_, KeyCode::Char('n')) => self.select_next_hunk(),
+            (_, KeyCode::Char('p')) => self.select_prev_hunk(),
             _ => {}
+        }
+    }
+
+    /// Select the next hunk, or the first one if nothing is selected.
+    pub fn select_next_hunk(&mut self) {
+        let hunks = self.diff.hunks();
+        let next = match self.selected_hunk {
+            None => hunks.first().copied(),
+            Some(current) => hunks
+                .iter()
+                .position(|id| *id == current)
+                .and_then(|i| hunks.get(i + 1))
+                .copied()
+                .or(Some(current)),
+        };
+        self.select_hunk(next);
+    }
+
+    /// Select the previous hunk, or the last one if nothing is selected.
+    pub fn select_prev_hunk(&mut self) {
+        let hunks = self.diff.hunks();
+        let prev = match self.selected_hunk {
+            None => hunks.last().copied(),
+            Some(current) => match hunks.iter().position(|id| *id == current) {
+                Some(i) if i > 0 => hunks.get(i - 1).copied(),
+                _ => Some(current),
+            },
+        };
+        self.select_hunk(prev);
+    }
+
+    fn select_hunk(&mut self, id: Option<HunkId>) {
+        self.selected_hunk = id;
+        if let Some(id) = id {
+            self.scroll_to_hunk(id);
+        }
+    }
+
+    /// Scroll so the hunk header lands near the top of the viewport, keeping a
+    /// couple of lines of context (e.g. the file header) visible above it.
+    fn scroll_to_hunk(&mut self, id: HunkId) {
+        if let Some(range) = self.diff.hunk_line_range(id) {
+            self.scroll = range.start.saturating_sub(2).min(self.max_scroll());
         }
     }
 }
@@ -87,6 +135,108 @@ mod tests {
 
     fn press(app: &mut App, code: KeyCode) {
         app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    /// Two files (1 hunk + 2 hunks), 8 lines; viewport shows 3.
+    fn app_with_hunks() -> App {
+        let mut app = App::new(crate::diff::two_file_view());
+        app.set_viewport_height(3);
+        app
+    }
+
+    #[test]
+    fn n_walks_hunks_forward_and_stops_at_last() {
+        let mut app = app_with_hunks();
+        press(&mut app, KeyCode::Char('n'));
+        assert_eq!(
+            app.selected_hunk,
+            Some(HunkId {
+                file_idx: 0,
+                hunk_idx: 0
+            })
+        );
+        press(&mut app, KeyCode::Char('n'));
+        assert_eq!(
+            app.selected_hunk,
+            Some(HunkId {
+                file_idx: 1,
+                hunk_idx: 0
+            })
+        );
+        press(&mut app, KeyCode::Char('n'));
+        assert_eq!(
+            app.selected_hunk,
+            Some(HunkId {
+                file_idx: 1,
+                hunk_idx: 1
+            })
+        );
+        press(&mut app, KeyCode::Char('n'));
+        assert_eq!(
+            app.selected_hunk,
+            Some(HunkId {
+                file_idx: 1,
+                hunk_idx: 1
+            }),
+            "no wraparound at the last hunk"
+        );
+    }
+
+    #[test]
+    fn p_walks_hunks_backward_and_stops_at_first() {
+        let mut app = app_with_hunks();
+        press(&mut app, KeyCode::Char('p'));
+        assert_eq!(
+            app.selected_hunk,
+            Some(HunkId {
+                file_idx: 1,
+                hunk_idx: 1
+            }),
+            "starts from the last hunk"
+        );
+        press(&mut app, KeyCode::Char('p'));
+        assert_eq!(
+            app.selected_hunk,
+            Some(HunkId {
+                file_idx: 1,
+                hunk_idx: 0
+            })
+        );
+        press(&mut app, KeyCode::Char('p'));
+        assert_eq!(
+            app.selected_hunk,
+            Some(HunkId {
+                file_idx: 0,
+                hunk_idx: 0
+            })
+        );
+        press(&mut app, KeyCode::Char('p'));
+        assert_eq!(
+            app.selected_hunk,
+            Some(HunkId {
+                file_idx: 0,
+                hunk_idx: 0
+            }),
+            "no wraparound at the first hunk"
+        );
+    }
+
+    #[test]
+    fn selecting_a_hunk_scrolls_it_into_view() {
+        let mut app = app_with_hunks();
+        assert_eq!(app.scroll, 0);
+        press(&mut app, KeyCode::Char('n'));
+        press(&mut app, KeyCode::Char('n'));
+        press(&mut app, KeyCode::Char('n'));
+        // Last hunk starts at line 6; 2 lines of context above it, so 4.
+        assert_eq!(app.scroll, 4);
+    }
+
+    #[test]
+    fn n_on_empty_diff_does_nothing() {
+        let mut app = App::new(DiffView::default());
+        press(&mut app, KeyCode::Char('n'));
+        assert_eq!(app.selected_hunk, None);
     }
 
     #[test]
