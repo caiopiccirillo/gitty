@@ -11,7 +11,7 @@ use anyhow::Result;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::ListState;
 
-use crate::diff::{DiffLine, DiffView, FileInfo, HunkId, LineKind};
+use crate::diff::{DiffLine, DiffView, FileInfo, HunkId, LineKind, SelectedLines};
 use crate::git;
 
 /// Which side of the staging area is shown.
@@ -40,6 +40,8 @@ pub struct App {
     pub files_state: ListState,
     /// Cursor line within the selected file's displayed diff.
     pub cursor: usize,
+    /// Where a visual line selection was started with `v`, if any.
+    pub visual_anchor: Option<usize>,
     /// Scroll offset of the diff pane, relative to the displayed lines.
     pub scroll: usize,
     /// One-off feedback shown in the status bar (e.g. staging errors).
@@ -68,6 +70,7 @@ impl App {
             selected_file: 0,
             files_state: ListState::default().with_selected(Some(0)),
             cursor: 0,
+            visual_anchor: None,
             scroll: 0,
             message: None,
             viewport_height: 0,
@@ -146,6 +149,82 @@ impl App {
         };
     }
 
+    /// Range of display lines covered by the visual selection, if active.
+    pub fn selection_range(&self) -> Option<Range<usize>> {
+        let anchor = self.visual_anchor?;
+        Some(anchor.min(self.cursor)..anchor.max(self.cursor) + 1)
+    }
+
+    fn toggle_visual(&mut self) {
+        self.visual_anchor = match self.visual_anchor {
+            Some(_) => None,
+            None if !self.display_lines().is_empty() => Some(self.cursor),
+            None => None,
+        };
+    }
+
+    /// The changed (`+`/`-`) lines covered by the visual selection, as
+    /// per-hunk ordinals consumed by git::stage_lines/unstage_lines.
+    fn selected_lines(&self) -> Option<(HunkId, SelectedLines)> {
+        let range = self.selection_range()?;
+        let anchor = self.visual_anchor?;
+        let lines = self.display_lines();
+        let hunk = HunkId {
+            file_idx: lines.get(anchor)?.file_idx,
+            hunk_idx: lines.get(anchor)?.hunk_idx?,
+        };
+        let mut selected = SelectedLines::default();
+        let (mut adds, mut dels) = (0, 0);
+        for i in self.hunk_bounds_at(anchor) {
+            match lines[i].kind {
+                LineKind::Addition => {
+                    if range.contains(&i) {
+                        selected.additions.insert(adds);
+                    }
+                    adds += 1;
+                }
+                LineKind::Deletion => {
+                    if range.contains(&i) {
+                        selected.deletions.insert(dels);
+                    }
+                    dels += 1;
+                }
+                _ => {}
+            }
+        }
+        (!selected.is_empty()).then_some((hunk, selected))
+    }
+
+    /// Stage only the visually selected lines (unstaged tab).
+    pub fn stage_selected_lines(&mut self) {
+        let Some((hunk, selected)) = self.selected_lines() else {
+            self.message = Some("no changed lines selected".into());
+            return;
+        };
+        self.message =
+            match git::stage_lines(&self.repo_path, hunk.file_idx, hunk.hunk_idx, &selected)
+                .and_then(|()| self.reload())
+            {
+                Ok(()) => None,
+                Err(e) => Some(format!("stage failed: {e}")),
+            };
+    }
+
+    /// Unstage only the visually selected lines (staged tab).
+    pub fn unstage_selected_lines(&mut self) {
+        let Some((hunk, selected)) = self.selected_lines() else {
+            self.message = Some("no changed lines selected".into());
+            return;
+        };
+        self.message =
+            match git::unstage_lines(&self.repo_path, hunk.file_idx, hunk.hunk_idx, &selected)
+                .and_then(|()| self.reload())
+            {
+                Ok(()) => None,
+                Err(e) => Some(format!("unstage failed: {e}")),
+            };
+    }
+
     fn with_hunk(&mut self, verb: &str, op: impl FnOnce(&Path, HunkId) -> Result<()>) {
         let Some(hunk) = self.current_hunk() else {
             self.message = Some("no hunk under the cursor".into());
@@ -168,6 +247,9 @@ impl App {
         if len == 0 {
             self.focus = Focus::Files;
         }
+        self.cursor = 0;
+        self.scroll = 0;
+        self.visual_anchor = None;
         self.clamp_cursor();
         Ok(())
     }
@@ -223,20 +305,40 @@ impl App {
                 self.move_cursor(-(self.viewport_height as isize / 2));
             }
             (_, KeyCode::Home) | (_, KeyCode::Char('g')) => {
-                self.cursor = self.current_hunk_bounds().start;
+                self.cursor = self.cursor_bounds().start;
                 self.clamp_cursor();
             }
             (_, KeyCode::End) | (_, KeyCode::Char('G')) => {
-                self.cursor = self.current_hunk_bounds().end.saturating_sub(1);
+                self.cursor = self.cursor_bounds().end.saturating_sub(1);
                 self.clamp_cursor();
             }
             (_, KeyCode::Char('n')) => self.jump_hunk(1),
             (_, KeyCode::Char('p')) => self.jump_hunk(-1),
-            (_, KeyCode::Left) | (_, KeyCode::Char('h')) | (_, KeyCode::Esc) => {
+            (_, KeyCode::Char('v')) => self.toggle_visual(),
+            (_, KeyCode::Left) | (_, KeyCode::Char('h')) => {
                 self.focus = Focus::Files;
             }
-            (_, KeyCode::Char('s')) if self.tab == Tab::Unstaged => self.stage_selected_hunk(),
-            (_, KeyCode::Char('u')) if self.tab == Tab::Staged => self.unstage_selected_hunk(),
+            (_, KeyCode::Esc) => {
+                if self.visual_anchor.is_some() {
+                    self.visual_anchor = None;
+                } else {
+                    self.focus = Focus::Files;
+                }
+            }
+            (_, KeyCode::Char('s')) if self.tab == Tab::Unstaged => {
+                if self.visual_anchor.is_some() {
+                    self.stage_selected_lines();
+                } else {
+                    self.stage_selected_hunk();
+                }
+            }
+            (_, KeyCode::Char('u')) if self.tab == Tab::Staged => {
+                if self.visual_anchor.is_some() {
+                    self.unstage_selected_lines();
+                } else {
+                    self.unstage_selected_hunk();
+                }
+            }
             _ => {}
         }
     }
@@ -255,6 +357,7 @@ impl App {
         self.files_state.select(Some(idx));
         self.cursor = 0;
         self.scroll = 0;
+        self.visual_anchor = None;
     }
 
     fn move_file(&mut self, delta: isize) {
@@ -266,10 +369,12 @@ impl App {
         self.select_file(next as usize);
     }
 
-    /// Move the cursor within its hunk; line-wise movement never crosses
-    /// hunk boundaries (n/p are for moving between hunks).
+    /// Move the cursor through the file's diff; line-wise movement freely
+    /// traverses hunks (n/p jump directly to hunk headers). While a visual
+    /// selection is active the cursor stays inside its hunk so the selection
+    /// always maps to a single, well-formed patch.
     fn move_cursor(&mut self, delta: isize) {
-        let bounds = self.current_hunk_bounds();
+        let bounds = self.cursor_bounds();
         if bounds.is_empty() {
             return;
         }
@@ -278,15 +383,25 @@ impl App {
         self.clamp_cursor();
     }
 
-    /// Display-line range of the hunk the cursor is in: from its `@@` header
-    /// to just before the next header (or the end of the file).
-    fn current_hunk_bounds(&self) -> Range<usize> {
+    /// Lines the cursor may roam: the whole file diff normally, only the
+    /// selected hunk while a visual selection is active.
+    fn cursor_bounds(&self) -> Range<usize> {
+        match self.visual_anchor {
+            Some(anchor) => self.hunk_bounds_at(anchor),
+            None => 0..self.display_lines().len(),
+        }
+    }
+
+    /// Display-line range of the hunk containing display line `line_idx`:
+    /// from its `@@` header to just before the next header (or the end of
+    /// the file).
+    fn hunk_bounds_at(&self, line_idx: usize) -> Range<usize> {
         let len = self.display_lines().len();
         if len == 0 {
             return 0..0;
         }
-        let cursor = self.cursor.min(len - 1);
-        let start = self.display_lines()[..=cursor]
+        let line_idx = line_idx.min(len - 1);
+        let start = self.display_lines()[..=line_idx]
             .iter()
             .rposition(|l| l.kind == LineKind::HunkHeader)
             .unwrap_or(0);
@@ -442,19 +557,20 @@ mod tests {
     }
 
     #[test]
-    fn cursor_is_confined_to_the_hunk() {
+    fn cursor_traverses_hunks_freely() {
         let mut app = test_app();
-        // File 1 displays: [hunk0 header, context | hunk1 header, deletion].
+        // File 1 displays: [hunk0 header, context, hunk1 header, deletion].
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Enter);
         press(&mut app, KeyCode::Char('j'));
-        assert_eq!(app.cursor, 1);
         press(&mut app, KeyCode::Char('j'));
-        assert_eq!(app.cursor, 1, "j stops at the end of the hunk");
-        press(&mut app, KeyCode::Char('n'));
-        assert_eq!(app.cursor, 2);
+        assert_eq!(app.cursor, 2, "j crosses into the next hunk");
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.cursor, 3);
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.cursor, 3, "clamped at the last line");
         press(&mut app, KeyCode::Char('k'));
-        assert_eq!(app.cursor, 2, "k stops at the start of the hunk");
+        assert_eq!(app.cursor, 2);
     }
 
     #[test]
@@ -463,12 +579,29 @@ mod tests {
         app.set_viewport_height(1);
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Enter);
-        press(&mut app, KeyCode::Char('n'));
         press(&mut app, KeyCode::Char('G'));
-        assert_eq!(app.cursor, 3, "G goes to the end of the current hunk");
+        assert_eq!(app.cursor, 3);
         assert_eq!(app.scroll, 3);
         press(&mut app, KeyCode::Char('g'));
-        assert_eq!(app.cursor, 2, "g goes to the start of the current hunk");
-        assert_eq!(app.scroll, 2);
+        assert_eq!(app.cursor, 0);
+        assert_eq!(app.scroll, 0);
+    }
+
+    #[test]
+    fn visual_selection_extends_and_stays_in_the_hunk() {
+        let mut app = test_app();
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('v'));
+        assert_eq!(app.selection_range(), Some(0..1));
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.selection_range(), Some(0..2));
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.cursor, 1, "selection cannot leave its hunk");
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.visual_anchor, None);
+        assert_eq!(app.focus, Focus::Diff, "Esc only cancels the selection");
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.focus, Focus::Files);
     }
 }

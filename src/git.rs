@@ -5,14 +5,24 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use git2::{ApplyLocation, Delta, Diff, DiffDelta, DiffFormat, DiffOptions, Repository, Tree};
 
-use crate::diff::{DiffLine, DiffView, FileInfo, FileStatus, LineKind};
+use crate::diff::{DiffLine, DiffView, FileInfo, FileStatus, LineKind, SelectedLines};
 
 /// Load the unstaged diff (workdir vs. index, like `git diff`) for the
-/// repository containing `path`.
+/// repository containing `path`. Untracked files are included.
 pub fn load_unstaged_diff(path: &Path) -> Result<DiffView> {
     let repo = open_repo(path)?;
-    let diff = repo.diff_index_to_workdir(None, Some(&mut DiffOptions::new()))?;
-    Ok(diff_to_view(&diff))
+    Ok(diff_to_view(&workdir_diff(&repo)?))
+}
+
+/// The workdir-vs-index diff with the options gitiff always uses (untracked
+/// files included, with their content), shared so that file/hunk indices
+/// are stable across calls.
+fn workdir_diff(repo: &Repository) -> Result<Diff<'_>> {
+    let mut opts = DiffOptions::new();
+    // `show_untracked_content` implies `include_untracked`.
+    opts.show_untracked_content(true)
+        .recurse_untracked_dirs(true);
+    Ok(repo.diff_index_to_workdir(None, Some(&mut opts))?)
 }
 
 /// Load the staged diff (index vs. HEAD, like `git diff --cached`).
@@ -29,7 +39,7 @@ pub fn load_staged_diff(path: &Path) -> Result<DiffView> {
 /// Stage a single hunk of the unstaged diff by applying it to the index.
 pub fn stage_hunk(path: &Path, file_idx: usize, hunk_idx: usize) -> Result<()> {
     let repo = open_repo(path)?;
-    let diff = repo.diff_index_to_workdir(None, Some(&mut DiffOptions::new()))?;
+    let diff = workdir_diff(&repo)?;
     apply_hunk_to_index(&repo, &diff, file_idx, hunk_idx)
 }
 
@@ -39,17 +49,57 @@ pub fn stage_hunk(path: &Path, file_idx: usize, hunk_idx: usize) -> Result<()> {
 /// patch text.
 pub fn unstage_hunk(path: &Path, file_idx: usize, hunk_idx: usize) -> Result<()> {
     let repo = open_repo(path)?;
-    // libgit2 has no index-to-tree diff, so materialize the index as a tree
-    // object (no commit involved) and diff it against HEAD: that is exactly
-    // the reverse of the staged diff, with matching hunk numbering.
+    with_reverse_staged_diff(&repo, |diff| {
+        apply_hunk_to_index(&repo, diff, file_idx, hunk_idx)
+    })
+}
+
+/// Stage only the selected changed lines of a hunk (unselected `+` lines are
+/// dropped, unselected `-` lines stay as context).
+pub fn stage_lines(
+    path: &Path,
+    file_idx: usize,
+    hunk_idx: usize,
+    selected: &SelectedLines,
+) -> Result<()> {
+    let repo = open_repo(path)?;
+    let diff = workdir_diff(&repo)?;
+    let patch = partial_hunk_patch(&diff, file_idx, hunk_idx, selected)?;
+    apply_patch_to_index(&repo, &patch)
+}
+
+/// Unstage only the selected changed lines of a staged hunk. The reverse
+/// diff swaps the roles of `+` and `-`, so the selection is swapped too.
+pub fn unstage_lines(
+    path: &Path,
+    file_idx: usize,
+    hunk_idx: usize,
+    selected: &SelectedLines,
+) -> Result<()> {
+    let repo = open_repo(path)?;
+    let swapped = SelectedLines {
+        additions: selected.deletions.clone(),
+        deletions: selected.additions.clone(),
+    };
+    with_reverse_staged_diff(&repo, |diff| {
+        let patch = partial_hunk_patch(diff, file_idx, hunk_idx, &swapped)?;
+        apply_patch_to_index(&repo, &patch)
+    })
+}
+
+/// Run `f` with the reverse of the staged diff (index tree vs. HEAD).
+/// libgit2 has no index-to-tree diff, so the index is materialized as a
+/// tree object (no commit involved) and diffed against HEAD; hunk numbering
+/// matches the staged view.
+fn with_reverse_staged_diff<R>(repo: &Repository, f: impl FnOnce(&Diff) -> Result<R>) -> Result<R> {
     let mut index = repo.index()?;
     let index_tree = repo.find_tree(index.write_tree()?)?;
     let diff = repo.diff_tree_to_tree(
         Some(&index_tree),
-        head_tree(&repo)?.as_ref(),
+        head_tree(repo)?.as_ref(),
         Some(&mut DiffOptions::new()),
     )?;
-    apply_hunk_to_index(&repo, &diff, file_idx, hunk_idx)
+    f(&diff)
 }
 
 /// Stage a whole file (like `git add <path>`). A deleted file is staged by
@@ -108,15 +158,33 @@ fn apply_hunk_to_index(
     hunk_idx: usize,
 ) -> Result<()> {
     let patch = hunk_patch(diff, file_idx, hunk_idx)?;
+    apply_patch_to_index(repo, &patch)
+}
+
+/// Parse `patch` and apply it to the index (like `git apply --cached`).
+fn apply_patch_to_index(repo: &Repository, patch: &str) -> Result<()> {
     let patch_diff = Diff::from_buffer(patch.as_bytes())?;
     repo.apply(&patch_diff, ApplyLocation::Index, None)?;
     Ok(())
 }
 
-/// Rebuild the unified-diff patch text of a single hunk: the file's header
-/// lines plus exactly one hunk, with origin prefixes (`+`/`-`/` `) restored.
-fn hunk_patch(diff: &Diff, target_file: usize, target_hunk: usize) -> Result<String> {
-    let mut patch = String::new();
+/// A hunk's raw material plus everything needed to rebuild its patch text.
+struct RawHunk {
+    /// The file's header lines (`diff --git`, `index`, `---`, `+++`), verbatim.
+    file_header: String,
+    /// The `@@ ... @@` line, verbatim.
+    hunk_header: String,
+    /// (origin, content with trailing newline) for each line inside the hunk.
+    lines: Vec<(char, String)>,
+}
+
+/// Extract the file header and one hunk's raw lines from a diff.
+fn find_hunk(diff: &Diff, target_file: usize, target_hunk: usize) -> Result<RawHunk> {
+    let mut raw = RawHunk {
+        file_header: String::new(),
+        hunk_header: String::new(),
+        lines: Vec::new(),
+    };
     let mut file_idx = 0usize;
     let mut hunk_idx: Option<usize> = None;
     // A file header spans several lines, so we detect file boundaries by the
@@ -140,24 +208,17 @@ fn hunk_patch(diff: &Diff, target_file: usize, target_hunk: usize) -> Result<Str
             return true;
         }
 
-        let content = String::from_utf8_lossy(line.content());
+        let content = String::from_utf8_lossy(line.content()).into_owned();
         match line.origin() {
-            'F' => patch.push_str(&content),
+            'F' => raw.file_header.push_str(&content),
             'H' => {
                 hunk_idx = Some(hunk_idx.map_or(0, |h| h + 1));
                 if hunk_idx == Some(target_hunk) {
                     found = true;
-                    patch.push_str(&content);
+                    raw.hunk_header.push_str(&content);
                 }
             }
-            origin if hunk_idx == Some(target_hunk) => {
-                // `+`/`-`/` ` need their origin prefix restored; "\ No newline
-                // at end of file" markers already contain the full line text.
-                if matches!(origin, '+' | '-' | ' ') {
-                    patch.push(origin);
-                }
-                patch.push_str(&content);
-            }
+            origin if hunk_idx == Some(target_hunk) => raw.lines.push((origin, content)),
             _ => {}
         }
         true
@@ -166,7 +227,98 @@ fn hunk_patch(diff: &Diff, target_file: usize, target_hunk: usize) -> Result<Str
     if !found {
         bail!("hunk {target_hunk} of file {target_file} not found");
     }
+    Ok(raw)
+}
+
+/// Rebuild the unified-diff patch text of a single hunk: the file's header
+/// lines plus exactly one hunk, with origin prefixes (`+`/`-`/` `) restored.
+fn hunk_patch(diff: &Diff, file_idx: usize, hunk_idx: usize) -> Result<String> {
+    let raw = find_hunk(diff, file_idx, hunk_idx)?;
+    let mut patch = raw.file_header + &raw.hunk_header;
+    for (origin, content) in &raw.lines {
+        // `+`/`-`/` ` need their origin prefix restored; "\ No newline at
+        // end of file" markers already contain the full line text.
+        if matches!(origin, '+' | '-' | ' ') {
+            patch.push(*origin);
+        }
+        patch.push_str(content);
+    }
     Ok(patch)
+}
+
+/// Rebuild the patch of one hunk keeping only the selected changed lines:
+/// unselected additions are dropped, unselected deletions become context,
+/// and the `@@` counts are recomputed.
+fn partial_hunk_patch(
+    diff: &Diff,
+    file_idx: usize,
+    hunk_idx: usize,
+    selected: &SelectedLines,
+) -> Result<String> {
+    let raw = find_hunk(diff, file_idx, hunk_idx)?;
+    let (mut old_start, mut new_start, section) = parse_hunk_header(&raw.hunk_header)?;
+
+    let mut body = String::new();
+    let (mut old_count, mut new_count) = (0usize, 0usize);
+    let (mut add_ord, mut del_ord) = (0usize, 0usize);
+    for (origin, content) in &raw.lines {
+        match origin {
+            ' ' => {
+                body.push(' ');
+                body.push_str(content);
+                old_count += 1;
+                new_count += 1;
+            }
+            '-' => {
+                if selected.deletions.contains(&del_ord) {
+                    body.push('-');
+                } else {
+                    // Not (un)staged: the line stays as it is on this side.
+                    body.push(' ');
+                    new_count += 1;
+                }
+                body.push_str(content);
+                old_count += 1;
+                del_ord += 1;
+            }
+            '+' => {
+                if selected.additions.contains(&add_ord) {
+                    body.push('+');
+                    body.push_str(content);
+                    new_count += 1;
+                }
+                add_ord += 1;
+            }
+            _ => body.push_str(content), // "\ No newline at end of file"
+        }
+    }
+    // For an empty side, the start is the line before the position.
+    if old_count == 0 {
+        old_start = old_start.saturating_sub(1);
+    }
+    if new_count == 0 {
+        new_start = new_start.saturating_sub(1);
+    }
+    let header = format!("@@ -{old_start},{old_count} +{new_start},{new_count} @@{section}");
+    Ok(raw.file_header + &header + &body)
+}
+
+/// Parse `@@ -a,b +c,d @@ section` into `(a, c, " section\n")`.
+fn parse_hunk_header(header: &str) -> Result<(usize, usize, &str)> {
+    let (ranges, section) = header
+        .split_once("@@ ")
+        .and_then(|(_, rest)| rest.split_once("@@"))
+        .context("malformed hunk header")?;
+    let mut sides = ranges.trim().split(' ');
+    let start_of = |side: Option<&str>| -> Result<usize> {
+        side.and_then(|s| s.get(1..))
+            .and_then(|s| s.split(',').next())
+            .and_then(|s| s.parse().ok())
+            .context("malformed hunk header")
+    };
+    let old_start = start_of(sides.next())?;
+    let new_start = start_of(sides.next())?;
+    Ok((old_start, new_start, section))
 }
 
 /// Convert a `git2` diff into our flat, render-friendly line model.
@@ -226,6 +378,7 @@ fn file_info(delta: &DiffDelta) -> FileInfo {
         Delta::Deleted => FileStatus::Deleted,
         Delta::Renamed => FileStatus::Renamed,
         Delta::Typechange => FileStatus::TypeChange,
+        Delta::Untracked => FileStatus::Untracked,
         _ => FileStatus::Modified,
     };
     let path = delta

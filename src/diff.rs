@@ -4,6 +4,7 @@
 //! but every line keeps track of the file and hunk it belongs to. Those
 //! indices are the identity we use when staging/unstaging individual hunks.
 
+use std::collections::BTreeSet;
 use std::ops::Range;
 
 /// The kind of a single line in a diff.
@@ -39,6 +40,21 @@ pub enum FileStatus {
     Modified,
     Renamed,
     TypeChange,
+    Untracked,
+}
+
+/// Changed lines selected inside one hunk, as 0-based ordinals counted
+/// separately for additions and deletions (in hunk order).
+#[derive(Debug, Default, Clone)]
+pub struct SelectedLines {
+    pub additions: BTreeSet<usize>,
+    pub deletions: BTreeSet<usize>,
+}
+
+impl SelectedLines {
+    pub fn is_empty(&self) -> bool {
+        self.additions.is_empty() && self.deletions.is_empty()
+    }
 }
 
 /// Per-file metadata, parallel to the `file_idx` tags on the lines.

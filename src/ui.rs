@@ -89,12 +89,17 @@ fn render_diff(frame: &mut Frame, app: &App, area: Rect) {
             // terminal, where it would reset the cursor column.
             let text = format!("{prefix}{}", line.content.trim_end_matches('\r'));
             let mut style = style_for(line.kind);
-            if i == app.cursor {
+            let in_selection = app.selection_range().is_some_and(|r| r.contains(&i));
+            if in_selection || i == app.cursor {
                 style = style.bg(Color::DarkGray);
                 if line.kind == LineKind::Meta {
                     // DarkGray on DarkGray would be unreadable.
                     style = style.fg(Color::Gray);
                 }
+            }
+            if i == app.cursor && app.visual_anchor.is_some() {
+                // While selecting, the cursor end is a shade lighter.
+                style = style.bg(Color::Gray);
             }
             Line::styled(text, style)
         })
@@ -130,9 +135,23 @@ fn status_bar(app: &App) -> Paragraph<'static> {
         Style::new().fg(Color::Black).bg(Color::Gray),
     );
 
-    let right = match app.message {
-        Some(ref message) => Span::styled(format!(" {message} "), Style::new().fg(Color::Red)),
-        None => Span::styled(hints(app), Style::new().fg(Color::DarkGray)),
+    let right = if let Some(range) = app.selection_range() {
+        let verb = match app.tab {
+            Tab::Unstaged => "s stage",
+            Tab::Staged => "u unstage",
+        };
+        Span::styled(
+            format!(
+                " visual: {} line(s) · {verb} lines · v/Esc cancel ",
+                range.len()
+            ),
+            Style::new().fg(Color::Yellow),
+        )
+    } else {
+        match app.message {
+            Some(ref message) => Span::styled(format!(" {message} "), Style::new().fg(Color::Red)),
+            None => Span::styled(hints(app), Style::new().fg(Color::DarkGray)),
+        }
     };
     Paragraph::new(Line::from(vec![left, right]))
 }
@@ -141,8 +160,12 @@ fn hints(app: &App) -> &'static str {
     match (app.focus, app.tab) {
         (Focus::Files, Tab::Unstaged) => " Tab · j/k file · space stage · Enter diff · q quit ",
         (Focus::Files, Tab::Staged) => " Tab · j/k file · space unstage · Enter diff · q quit ",
-        (Focus::Diff, Tab::Unstaged) => " j/k line · n/p hunk · s stage · h back · q quit ",
-        (Focus::Diff, Tab::Staged) => " j/k line · n/p hunk · u unstage · h back · q quit ",
+        (Focus::Diff, Tab::Unstaged) => {
+            " j/k line · n/p hunk · v select · s stage · h back · q quit "
+        }
+        (Focus::Diff, Tab::Staged) => {
+            " j/k line · n/p hunk · v select · u unstage · h back · q quit "
+        }
     }
 }
 
@@ -162,6 +185,7 @@ fn status_badge(status: FileStatus) -> (&'static str, Color) {
         FileStatus::Modified => ("M", Color::Yellow),
         FileStatus::Renamed => ("R", Color::Blue),
         FileStatus::TypeChange => ("T", Color::Magenta),
+        FileStatus::Untracked => ("?", Color::Green),
     }
 }
 
@@ -298,6 +322,20 @@ mod tests {
         let (screen, _) = render_app(&mut app, 80, 10);
         assert!(screen.contains("f25.txt"), "selected file stays visible");
         assert!(!screen.contains("f00.txt"), "top of the list scrolled away");
+    }
+
+    #[test]
+    fn visual_selection_highlights_the_range() {
+        let mut app = sample_app();
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('v'));
+        press(&mut app, KeyCode::Char('j'));
+        let (screen, buffer) = render_app(&mut app, 80, 10);
+        assert!(screen.contains("visual: 2 line(s)"));
+        // The anchored @@ line is part of the selection...
+        assert_eq!(buffer[(25, 1)].bg, Color::DarkGray);
+        // ...and the cursor end is lighter.
+        assert_eq!(buffer[(25, 2)].bg, Color::Gray);
     }
 
     #[test]
