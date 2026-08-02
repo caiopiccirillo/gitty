@@ -58,14 +58,14 @@ impl SelectedLines {
 }
 
 /// Per-file metadata, parallel to the `file_idx` tags on the lines.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileInfo {
     pub path: String,
     pub status: FileStatus,
 }
 
 /// One displayable line of the diff.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiffLine {
     pub kind: LineKind,
     /// Raw line content without the origin prefix (`+`/`-`/` `) and without
@@ -79,7 +79,7 @@ pub struct DiffLine {
 }
 
 /// A full diff as a flat list of lines plus per-file metadata.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct DiffView {
     pub lines: Vec<DiffLine>,
     pub files: Vec<FileInfo>,

@@ -218,7 +218,7 @@ impl App {
         else {
             return;
         };
-        self.message = match op(&self.repo_path, &file).and_then(|()| self.reload()) {
+        self.message = match op(&self.repo_path, &file).and_then(|()| self.refresh()) {
             Ok(()) => None,
             Err(e) => Some(format!("{verb} failed: {e}")),
         };
@@ -243,7 +243,7 @@ impl App {
         self.message = match files
             .iter()
             .try_for_each(|f| op(&self.repo_path, f))
-            .and_then(|()| self.reload())
+            .and_then(|()| self.refresh())
         {
             Ok(()) => None,
             Err(e) => Some(format!("{verb} failed: {e}")),
@@ -296,7 +296,7 @@ impl App {
         };
         self.message =
             match git::stage_lines(&self.repo_path, hunk.file_idx, hunk.hunk_idx, &selected)
-                .and_then(|()| self.reload())
+                .and_then(|()| self.refresh())
             {
                 Ok(()) => None,
                 Err(e) => Some(format!("stage failed: {e}")),
@@ -311,7 +311,7 @@ impl App {
         };
         self.message =
             match git::unstage_lines(&self.repo_path, hunk.file_idx, hunk.hunk_idx, &selected)
-                .and_then(|()| self.reload())
+                .and_then(|()| self.refresh())
             {
                 Ok(()) => None,
                 Err(e) => Some(format!("unstage failed: {e}")),
@@ -323,27 +323,76 @@ impl App {
             self.message = Some("no hunk under the cursor".into());
             return;
         };
-        self.message = match op(&self.repo_path, hunk).and_then(|()| self.reload()) {
+        self.message = match op(&self.repo_path, hunk).and_then(|()| self.refresh()) {
             Ok(()) => None,
             Err(e) => Some(format!("{verb} failed: {e}")),
         };
     }
 
-    /// Reload both diffs after a mutation and clamp the selection into the
-    /// (possibly shrunk) file lists.
-    fn reload(&mut self) -> Result<()> {
-        self.unstaged = git::load_unstaged_diff(&self.repo_path)?;
-        self.staged = git::load_staged_diff(&self.repo_path)?;
+    /// Reload both diffs from disk, preserving the selection and cursor by
+    /// path. No-op when nothing changed.
+    pub fn refresh(&mut self) -> Result<()> {
+        let unstaged = git::load_unstaged_diff(&self.repo_path)?;
+        let staged = git::load_staged_diff(&self.repo_path)?;
+        if unstaged == self.unstaged && staged == self.staged {
+            return Ok(());
+        }
+        let identity = self.selected_node().map(|n| self.identity_of(n));
+        let (cursor, scroll) = (self.cursor, self.scroll);
+        self.unstaged = unstaged;
+        self.staged = staged;
         self.rebuild_tree();
         if self.tree.is_empty() {
             self.focus = Focus::Files;
         }
-        self.cursor = 0;
-        self.scroll = 0;
         self.visual_anchor = None;
+        if let Some(row) = identity.and_then(|id| self.find_row(&id)) {
+            self.selected_row = row;
+            self.files_state.select(Some(row));
+            self.cursor = cursor;
+            self.scroll = scroll;
+        } else {
+            self.cursor = 0;
+            self.scroll = 0;
+        }
         self.clamp_cursor();
         Ok(())
     }
+
+    /// Refresh from disk changes, unless the user is mid-selection
+    /// (auto-refresh on the event loop's idle tick).
+    pub fn auto_refresh(&mut self) {
+        if self.visual_anchor.is_none() {
+            let _ = self.refresh();
+        }
+    }
+
+    /// Path-based identity of a tree row, so it can be re-found after a
+    /// refresh even if file indices shifted.
+    fn identity_of(&self, node: &Node) -> NodeIdentity {
+        match node {
+            Node::Dir { path, .. } => NodeIdentity::Dir(path.clone()),
+            Node::File { file_idx, .. } => {
+                NodeIdentity::File(self.current_diff().files[*file_idx].path.clone())
+            }
+        }
+    }
+
+    fn find_row(&self, identity: &NodeIdentity) -> Option<usize> {
+        self.tree.iter().position(|node| match (node, identity) {
+            (Node::Dir { path, .. }, NodeIdentity::Dir(want)) => path == want,
+            (Node::File { file_idx, .. }, NodeIdentity::File(want)) => {
+                self.current_diff().files[*file_idx].path == *want
+            }
+            _ => false,
+        })
+    }
+}
+
+/// Path-based identity of a tree row (see [`App::refresh`]).
+enum NodeIdentity {
+    Dir(String),
+    File(String),
 }
 
 /// A file's diff lines without its file-header lines.
