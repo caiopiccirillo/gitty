@@ -10,7 +10,8 @@ use ratatui::{
 };
 
 use crate::app::{App, Focus, Tab};
-use crate::diff::{FileStatus, LineKind};
+use crate::diff::{FileStatus, HunkId, LineKind};
+use crate::tree::Node;
 
 pub fn render(frame: &mut Frame, app: &mut App) {
     let [main_area, status_area] =
@@ -33,15 +34,40 @@ fn render_files(frame: &mut Frame, app: &mut App, area: Rect) {
             Tab::Unstaged => format!(" Unstaged ({}) ", diff.files.len()),
             Tab::Staged => format!(" Staged ({}) ", diff.files.len()),
         };
-        let items: Vec<ListItem> = diff
-            .files
+        let items: Vec<ListItem> = app
+            .tree
             .iter()
-            .map(|file| {
-                let (letter, color) = status_badge(file.status);
-                ListItem::new(Line::from(vec![
-                    Span::styled(format!("{letter} "), Style::new().fg(color)),
-                    Span::raw(file.path.clone()),
-                ]))
+            .map(|node| match node {
+                Node::Dir {
+                    name,
+                    depth,
+                    collapsed,
+                    file_count,
+                    ..
+                } => {
+                    let (arrow, suffix) = if *collapsed {
+                        ("▸", format!(" ({file_count})"))
+                    } else {
+                        ("▾", String::new())
+                    };
+                    ListItem::new(Line::from(vec![
+                        Span::raw(format!("{}{arrow} ", "  ".repeat(*depth))),
+                        Span::styled(
+                            format!("{name}/{suffix}"),
+                            Style::new().add_modifier(Modifier::BOLD),
+                        ),
+                    ]))
+                }
+                Node::File { file_idx, depth } => {
+                    let file = &diff.files[*file_idx];
+                    let (letter, color) = status_badge(file.status);
+                    let name = file.path.rsplit('/').next().unwrap_or(&file.path);
+                    ListItem::new(Line::from(vec![
+                        Span::raw("  ".repeat(*depth)),
+                        Span::styled(format!("{letter} "), Style::new().fg(color)),
+                        Span::raw(name.to_string()),
+                    ]))
+                }
             })
             .collect();
         (title, items)
@@ -66,12 +92,16 @@ fn render_files(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn render_diff(frame: &mut Frame, app: &App, area: Rect) {
-    let title = app
-        .current_diff()
-        .files
-        .get(app.selected_file)
-        .map(|file| format!(" {} ", file.path))
-        .unwrap_or_else(|| " diff ".into());
+    let title = match app.selected_node() {
+        Some(Node::File { file_idx, .. }) => app
+            .current_diff()
+            .files
+            .get(*file_idx)
+            .map(|file| format!(" {} ", file.path))
+            .unwrap_or_else(|| " diff ".into()),
+        Some(Node::Dir { path, .. }) => format!(" {path}/ "),
+        None => " diff ".into(),
+    };
     let block = pane_block(title, app.focus == Focus::Diff);
 
     let lines: Vec<Line> = app
@@ -115,23 +145,31 @@ fn status_bar(app: &App) -> Paragraph<'static> {
         Tab::Unstaged => "unstaged",
         Tab::Staged => "staged",
     };
-    let file_pos = if diff.files.is_empty() {
-        "0/0".to_string()
-    } else {
-        format!("{}/{}", app.selected_file + 1, diff.files.len())
+    let selection = match app.selected_node() {
+        Some(Node::File { file_idx, .. }) => format!("file {}/{}", file_idx + 1, diff.files.len()),
+        Some(Node::Dir { file_count, .. }) => format!("dir ({file_count} file(s))"),
+        None => "file 0/0".to_string(),
     };
-    let file_hunks: Vec<_> = diff
-        .hunks()
-        .into_iter()
-        .filter(|id| id.file_idx == app.selected_file)
-        .collect();
+    // Hunks currently visible in the diff pane.
+    let mut displayed: Vec<HunkId> = Vec::new();
+    for line in app.display_lines() {
+        if let Some(hunk_idx) = line.hunk_idx {
+            let id = HunkId {
+                file_idx: line.file_idx,
+                hunk_idx,
+            };
+            if displayed.last() != Some(&id) {
+                displayed.push(id);
+            }
+        }
+    }
     let hunk_pos = app
         .current_hunk()
-        .and_then(|cur| file_hunks.iter().position(|id| *id == cur))
-        .map(|i| format!(" · hunk {}/{}", i + 1, file_hunks.len()))
+        .and_then(|cur| displayed.iter().position(|id| *id == cur))
+        .map(|i| format!(" · hunk {}/{}", i + 1, displayed.len()))
         .unwrap_or_default();
     let left = Span::styled(
-        format!(" {tab_name} · file {file_pos}{hunk_pos} "),
+        format!(" {tab_name} · {selection}{hunk_pos} "),
         Style::new().fg(Color::Black).bg(Color::Gray),
     );
 
@@ -158,8 +196,8 @@ fn status_bar(app: &App) -> Paragraph<'static> {
 
 fn hints(app: &App) -> &'static str {
     match (app.focus, app.tab) {
-        (Focus::Files, Tab::Unstaged) => " Tab · j/k file · space stage · Enter diff · q quit ",
-        (Focus::Files, Tab::Staged) => " Tab · j/k file · space unstage · Enter diff · q quit ",
+        (Focus::Files, Tab::Unstaged) => " Tab · j/k · space stage · h/l fold · Enter · q quit ",
+        (Focus::Files, Tab::Staged) => " Tab · j/k · space unstage · h/l fold · Enter · q quit ",
         (Focus::Diff, Tab::Unstaged) => {
             " j/k line · n/p hunk · v select · s stage · h back · q quit "
         }
@@ -317,7 +355,7 @@ mod tests {
         for _ in 0..25 {
             press(&mut app, KeyCode::Char('j'));
         }
-        assert_eq!(app.selected_file, 25);
+        assert_eq!(app.selected_row, 25);
         // Height 10 -> the list shows at most 7 rows, far from the top.
         let (screen, _) = render_app(&mut app, 80, 10);
         assert!(screen.contains("f25.txt"), "selected file stays visible");
@@ -336,6 +374,63 @@ mod tests {
         assert_eq!(buffer[(25, 1)].bg, Color::DarkGray);
         // ...and the cursor end is lighter.
         assert_eq!(buffer[(25, 2)].bg, Color::Gray);
+    }
+
+    #[test]
+    fn renders_and_collapses_directory_rows() {
+        let line =
+            |kind: LineKind, file_idx: usize, hunk_idx: Option<usize>, content: &str| DiffLine {
+                kind,
+                content: content.into(),
+                file_idx,
+                hunk_idx,
+            };
+        let view = DiffView {
+            lines: vec![
+                line(
+                    LineKind::FileHeader,
+                    0,
+                    None,
+                    "diff --git a/src/app.rs b/src/app.rs",
+                ),
+                line(LineKind::HunkHeader, 0, Some(0), "@@ -1 +1 @@"),
+                line(LineKind::Addition, 0, Some(0), "one"),
+                line(
+                    LineKind::FileHeader,
+                    1,
+                    None,
+                    "diff --git a/src/lib.rs b/src/lib.rs",
+                ),
+                line(LineKind::HunkHeader, 1, Some(0), "@@ -1 +1 @@"),
+                line(LineKind::Addition, 1, Some(0), "two"),
+            ],
+            files: ["src/app.rs", "src/lib.rs"]
+                .into_iter()
+                .map(|path| FileInfo {
+                    path: path.into(),
+                    status: FileStatus::Modified,
+                })
+                .collect(),
+        };
+        let mut app = App::new(view, DiffView::default(), PathBuf::from("/unused"));
+
+        let (screen, _) = render_app(&mut app, 80, 10);
+        assert!(screen.contains("▾ src/"));
+        assert!(screen.contains("app.rs"));
+        assert!(screen.contains("lib.rs"));
+        // A directory selection aggregates both file diffs (headers kept).
+        assert!(screen.contains("diff --git a/src/app.rs b/src/app.rs"));
+        assert!(screen.contains("+one"));
+        assert!(screen.contains("+two"));
+        assert!(screen.contains("dir (2 file(s))"));
+
+        press(&mut app, KeyCode::Enter);
+        let (screen, _) = render_app(&mut app, 80, 10);
+        assert!(screen.contains("▸ src/ (2)"));
+        assert!(
+            !app.tree.iter().any(|n| matches!(n, Node::File { .. })),
+            "file rows hidden after collapse"
+        );
     }
 
     #[test]

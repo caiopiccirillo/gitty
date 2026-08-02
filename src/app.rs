@@ -4,6 +4,7 @@
 //! hunks of the selected file, and a per-line cursor inside the diff (right
 //! pane). The hunk under the cursor is the target of stage/unstage.
 
+use std::collections::HashSet;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
@@ -13,6 +14,7 @@ use ratatui::widgets::ListState;
 
 use crate::diff::{DiffLine, DiffView, FileInfo, HunkId, LineKind, SelectedLines};
 use crate::git;
+use crate::tree::{self, Node};
 
 /// Which side of the staging area is shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,8 +35,12 @@ pub struct App {
     pub staged: DiffView,
     pub tab: Tab,
     pub focus: Focus,
-    /// Selected file index within the current tab's file list.
-    pub selected_file: usize,
+    /// Visible rows of the files pane tree (directories + files).
+    pub tree: Vec<Node>,
+    /// Directory paths the user has collapsed.
+    pub collapsed_dirs: HashSet<String>,
+    /// Selected row in the files pane tree.
+    pub selected_row: usize,
     /// Scroll state of the files pane; ratatui manages the offset so the
     /// selection stays visible in long lists.
     pub files_state: ListState,
@@ -62,12 +68,14 @@ impl App {
     }
 
     pub fn new(unstaged: DiffView, staged: DiffView, repo_path: PathBuf) -> Self {
-        Self {
+        let mut app = Self {
             unstaged,
             staged,
             tab: Tab::Unstaged,
             focus: Focus::Files,
-            selected_file: 0,
+            tree: Vec::new(),
+            collapsed_dirs: HashSet::new(),
+            selected_row: 0,
             files_state: ListState::default().with_selected(Some(0)),
             cursor: 0,
             visual_anchor: None,
@@ -76,7 +84,9 @@ impl App {
             viewport_height: 0,
             repo_path,
             should_quit: false,
-        }
+        };
+        app.rebuild_tree();
+        app
     }
 
     pub fn current_diff(&self) -> &DiffView {
@@ -86,24 +96,82 @@ impl App {
         }
     }
 
-    /// Lines shown in the diff pane: the selected file's diff without its
+    /// Lines shown in the diff pane. For a file: its diff without the
     /// `diff --git`/`index`/`---`/`+++` header lines (the pane title shows
-    /// the path instead).
-    pub fn display_lines(&self) -> &[DiffLine] {
-        let Some(range) = self.current_diff().file_line_range(self.selected_file) else {
-            return &[];
-        };
-        let lines = &self.current_diff().lines[range];
-        let headers = lines
+    /// the path instead). For a directory: the diffs of all files beneath
+    /// it, concatenated, keeping each file's header lines as separators.
+    pub fn display_lines(&self) -> Vec<&DiffLine> {
+        let diff = self.current_diff();
+        match self.selected_node() {
+            Some(&Node::File { file_idx, .. }) => file_display_lines(diff, file_idx),
+            Some(Node::Dir { path, .. }) => {
+                let mut lines = Vec::new();
+                for idx in self.dir_file_indices(path) {
+                    if let Some(range) = diff.file_line_range(idx) {
+                        lines.extend(diff.lines[range].iter());
+                    }
+                }
+                lines
+            }
+            None => Vec::new(),
+        }
+    }
+
+    /// The currently selected row of the files pane tree.
+    pub fn selected_node(&self) -> Option<&Node> {
+        self.tree.get(self.selected_row)
+    }
+
+    /// File index of the selection, when it is a file row.
+    fn selected_file_idx(&self) -> Option<usize> {
+        match self.selected_node() {
+            Some(Node::File { file_idx, .. }) => Some(*file_idx),
+            _ => None,
+        }
+    }
+
+    /// Indices of all files beneath a directory, recursively.
+    fn dir_file_indices(&self, dir: &str) -> Vec<usize> {
+        let prefix = format!("{dir}/");
+        self.current_diff()
+            .files
             .iter()
-            .take_while(|l| l.kind == LineKind::FileHeader)
-            .count();
-        &lines[headers..]
+            .enumerate()
+            .filter(|(_, f)| f.path.starts_with(&prefix))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// All files beneath a directory, recursively.
+    fn dir_files(&self, dir: &str) -> Vec<FileInfo> {
+        self.dir_file_indices(dir)
+            .into_iter()
+            .filter_map(|i| self.current_diff().files.get(i).cloned())
+            .collect()
+    }
+
+    /// Row index of a directory in the tree, if visible.
+    fn dir_row(&self, path: &str) -> Option<usize> {
+        self.tree
+            .iter()
+            .position(|n| matches!(n, Node::Dir { path: p, .. } if p == path))
+    }
+
+    /// Rebuild the files pane tree and keep the selection valid.
+    fn rebuild_tree(&mut self) {
+        self.tree = tree::visible_rows(&self.current_diff().files, &self.collapsed_dirs);
+        self.selected_row = if self.tree.is_empty() {
+            0
+        } else {
+            self.selected_row.min(self.tree.len() - 1)
+        };
+        self.files_state.select(Some(self.selected_row));
     }
 
     /// Hunk under the cursor — the target of stage/unstage.
     pub fn current_hunk(&self) -> Option<HunkId> {
-        let line = self.display_lines().get(self.cursor)?;
+        let lines = self.display_lines();
+        let line = lines.get(self.cursor)?;
         line.hunk_idx.map(|hunk_idx| HunkId {
             file_idx: line.file_idx,
             hunk_idx,
@@ -140,10 +208,40 @@ impl App {
     }
 
     fn with_file(&mut self, verb: &str, op: impl FnOnce(&Path, &FileInfo) -> Result<()>) {
-        let Some(file) = self.current_diff().files.get(self.selected_file).cloned() else {
+        let Some(file) = self
+            .selected_file_idx()
+            .and_then(|i| self.current_diff().files.get(i))
+            .cloned()
+        else {
             return;
         };
         self.message = match op(&self.repo_path, &file).and_then(|()| self.reload()) {
+            Ok(()) => None,
+            Err(e) => Some(format!("{verb} failed: {e}")),
+        };
+    }
+
+    /// Stage all files beneath the selected directory (files pane, unstaged tab).
+    pub fn stage_selected_dir(&mut self) {
+        if let Some(Node::Dir { path, .. }) = self.selected_node().cloned() {
+            self.with_dir("stage", &path, git::stage_file);
+        }
+    }
+
+    /// Unstage all files beneath the selected directory (files pane, staged tab).
+    pub fn unstage_selected_dir(&mut self) {
+        if let Some(Node::Dir { path, .. }) = self.selected_node().cloned() {
+            self.with_dir("unstage", &path, git::unstage_file);
+        }
+    }
+
+    fn with_dir(&mut self, verb: &str, dir: &str, op: impl Fn(&Path, &FileInfo) -> Result<()>) {
+        let files = self.dir_files(dir);
+        self.message = match files
+            .iter()
+            .try_for_each(|f| op(&self.repo_path, f))
+            .and_then(|()| self.reload())
+        {
             Ok(()) => None,
             Err(e) => Some(format!("{verb} failed: {e}")),
         };
@@ -241,10 +339,8 @@ impl App {
     fn reload(&mut self) -> Result<()> {
         self.unstaged = git::load_unstaged_diff(&self.repo_path)?;
         self.staged = git::load_staged_diff(&self.repo_path)?;
-        let len = self.current_diff().files.len();
-        self.selected_file = len.saturating_sub(1).min(self.selected_file);
-        self.files_state.select(Some(self.selected_file));
-        if len == 0 {
+        self.rebuild_tree();
+        if self.tree.is_empty() {
             self.focus = Focus::Files;
         }
         self.cursor = 0;
@@ -270,25 +366,95 @@ impl App {
 
     fn handle_files_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Down | KeyCode::Char('j') => self.move_file(1),
-            KeyCode::Up | KeyCode::Char('k') => self.move_file(-1),
-            KeyCode::Home | KeyCode::Char('g') => self.select_file(0),
+            KeyCode::Down | KeyCode::Char('j') => self.move_row(1),
+            KeyCode::Up | KeyCode::Char('k') => self.move_row(-1),
+            KeyCode::Home | KeyCode::Char('g') => self.select_row(0),
             KeyCode::End | KeyCode::Char('G') => {
-                let len = self.current_diff().files.len();
-                if len > 0 {
-                    self.select_file(len - 1);
+                if !self.tree.is_empty() {
+                    self.select_row(self.tree.len() - 1);
                 }
             }
-            KeyCode::Enter | KeyCode::Right | KeyCode::Char('l')
-                if !self.current_diff().files.is_empty() =>
-            {
-                self.focus = Focus::Diff;
-            }
-            KeyCode::Char(' ') => match self.tab {
-                Tab::Unstaged => self.stage_selected_file(),
-                Tab::Staged => self.unstage_selected_file(),
+            KeyCode::Enter => self.files_activate(),
+            KeyCode::Right | KeyCode::Char('l') => self.files_right(),
+            KeyCode::Left | KeyCode::Char('h') => self.files_left(),
+            KeyCode::Char(' ') => match (self.tab, self.selected_node().cloned()) {
+                (Tab::Unstaged, Some(Node::File { .. })) => self.stage_selected_file(),
+                (Tab::Unstaged, Some(Node::Dir { .. })) => self.stage_selected_dir(),
+                (Tab::Staged, Some(Node::File { .. })) => self.unstage_selected_file(),
+                (Tab::Staged, Some(Node::Dir { .. })) => self.unstage_selected_dir(),
+                _ => {}
             },
             _ => {}
+        }
+    }
+
+    /// Enter on the files pane: directories fold/unfold, files open their diff.
+    fn files_activate(&mut self) {
+        match self.selected_node().cloned() {
+            Some(Node::Dir { path, .. }) => self.toggle_dir(&path),
+            Some(Node::File { .. }) => self.focus = Focus::Diff,
+            None => {}
+        }
+    }
+
+    /// Right/`l`: expand a collapsed directory, or open a file's diff.
+    fn files_right(&mut self) {
+        match self.selected_node().cloned() {
+            Some(Node::Dir {
+                path, collapsed, ..
+            }) => {
+                if collapsed {
+                    self.set_dir_collapsed(&path, false);
+                }
+            }
+            Some(Node::File { .. }) => self.focus = Focus::Diff,
+            None => {}
+        }
+    }
+
+    /// Left/`h`: collapse an expanded directory, or move the selection to
+    /// the parent directory row.
+    fn files_left(&mut self) {
+        match self.selected_node().cloned() {
+            Some(Node::Dir {
+                path,
+                collapsed: false,
+                ..
+            }) => self.set_dir_collapsed(&path, true),
+            Some(Node::Dir {
+                path,
+                collapsed: true,
+                ..
+            }) => {
+                if let Some(row) = tree::parent_dir(&path).and_then(|p| self.dir_row(p)) {
+                    self.select_row(row);
+                }
+            }
+            Some(Node::File { file_idx, .. }) => {
+                let path = self.current_diff().files[file_idx].path.clone();
+                if let Some(row) = tree::parent_dir(&path).and_then(|p| self.dir_row(p)) {
+                    self.select_row(row);
+                }
+            }
+            None => {}
+        }
+    }
+
+    fn toggle_dir(&mut self, path: &str) {
+        let collapse = !self.collapsed_dirs.contains(path);
+        self.set_dir_collapsed(path, collapse);
+    }
+
+    fn set_dir_collapsed(&mut self, path: &str, collapse: bool) {
+        if collapse {
+            self.collapsed_dirs.insert(path.to_string());
+        } else {
+            self.collapsed_dirs.remove(path);
+        }
+        self.rebuild_tree();
+        // Keep the toggled directory selected.
+        if let Some(row) = self.dir_row(path) {
+            self.select_row(row);
         }
     }
 
@@ -349,24 +515,27 @@ impl App {
             Tab::Staged => Tab::Unstaged,
         };
         self.focus = Focus::Files;
-        self.select_file(0);
+        self.selected_row = 0;
+        self.rebuild_tree();
+        self.cursor = 0;
+        self.scroll = 0;
+        self.visual_anchor = None;
     }
 
-    fn select_file(&mut self, idx: usize) {
-        self.selected_file = idx;
+    fn select_row(&mut self, idx: usize) {
+        self.selected_row = idx;
         self.files_state.select(Some(idx));
         self.cursor = 0;
         self.scroll = 0;
         self.visual_anchor = None;
     }
 
-    fn move_file(&mut self, delta: isize) {
-        let len = self.current_diff().files.len();
-        if len == 0 {
+    fn move_row(&mut self, delta: isize) {
+        if self.tree.is_empty() {
             return;
         }
-        let next = (self.selected_file as isize + delta).clamp(0, len as isize - 1);
-        self.select_file(next as usize);
+        let next = (self.selected_row as isize + delta).clamp(0, self.tree.len() as isize - 1);
+        self.select_row(next as usize);
     }
 
     /// Move the cursor through the file's diff; line-wise movement freely
@@ -419,7 +588,7 @@ impl App {
     /// Move the cursor to the next/previous hunk header within the file.
     fn jump_hunk(&mut self, direction: isize) {
         let lines = self.display_lines();
-        let is_header = |(_, line): &(usize, &DiffLine)| line.kind == LineKind::HunkHeader;
+        let is_header = |(_, line): &(usize, &&DiffLine)| line.kind == LineKind::HunkHeader;
         let target = if direction > 0 {
             lines
                 .iter()
@@ -465,10 +634,23 @@ impl App {
     }
 }
 
+/// A file's diff lines without its file-header lines.
+fn file_display_lines(diff: &DiffView, file_idx: usize) -> Vec<&DiffLine> {
+    let Some(range) = diff.file_line_range(file_idx) else {
+        return Vec::new();
+    };
+    let lines = &diff.lines[range];
+    let headers = lines
+        .iter()
+        .take_while(|l| l.kind == LineKind::FileHeader)
+        .count();
+    lines[headers..].iter().collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diff::two_file_view;
+    use crate::diff::{FileStatus, two_file_view};
 
     /// Two files (1 hunk + 2 hunks), staged side empty.
     fn test_app() -> App {
@@ -490,14 +672,14 @@ mod tests {
     }
 
     #[test]
-    fn file_selection_moves_and_clamps() {
+    fn row_selection_moves_and_clamps() {
         let mut app = test_app();
         press(&mut app, KeyCode::Char('j'));
-        assert_eq!(app.selected_file, 1);
+        assert_eq!(app.selected_row, 1);
         press(&mut app, KeyCode::Char('j'));
-        assert_eq!(app.selected_file, 1, "clamped at last file");
+        assert_eq!(app.selected_row, 1, "clamped at last row");
         press(&mut app, KeyCode::Char('k'));
-        assert_eq!(app.selected_file, 0);
+        assert_eq!(app.selected_row, 0);
     }
 
     #[test]
@@ -548,7 +730,7 @@ mod tests {
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Tab);
         assert_eq!(app.tab, Tab::Staged);
-        assert_eq!(app.selected_file, 0);
+        assert_eq!(app.selected_row, 0);
         assert_eq!(app.focus, Focus::Files);
         // Staged side is empty: Enter must not focus the diff.
         press(&mut app, KeyCode::Enter);
@@ -603,5 +785,87 @@ mod tests {
         assert_eq!(app.focus, Focus::Diff, "Esc only cancels the selection");
         press(&mut app, KeyCode::Esc);
         assert_eq!(app.focus, Focus::Files);
+    }
+
+    /// src/app.rs, src/git/ops.rs, top.rs — one hunk each.
+    fn nested_view() -> DiffView {
+        let line = |kind: LineKind, file_idx: usize, hunk_idx: Option<usize>| DiffLine {
+            kind,
+            content: String::new(),
+            file_idx,
+            hunk_idx,
+        };
+        let mut lines = Vec::new();
+        for idx in 0..3 {
+            lines.push(line(LineKind::FileHeader, idx, None));
+            lines.push(line(LineKind::HunkHeader, idx, Some(0)));
+            lines.push(line(LineKind::Addition, idx, Some(0)));
+        }
+        DiffView {
+            lines,
+            files: ["src/app.rs", "src/git/ops.rs", "top.rs"]
+                .into_iter()
+                .map(|path| FileInfo {
+                    path: path.into(),
+                    status: FileStatus::Modified,
+                })
+                .collect(),
+        }
+    }
+
+    fn nested_app() -> App {
+        // Rows (dirs first): [Dir src, Dir src/git, File ops.rs, File app.rs, File top.rs]
+        let mut app = App::new(nested_view(), DiffView::default(), PathBuf::from("/unused"));
+        app.set_viewport_height(10);
+        app
+    }
+
+    #[test]
+    fn enter_on_a_dir_collapses_and_expands_it() {
+        let mut app = nested_app();
+        assert_eq!(app.tree.len(), 5);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.tree.len(), 2, "collapsed to [Dir src, File top.rs]");
+        assert_eq!(app.selected_row, 0, "the dir stays selected");
+        assert!(app.collapsed_dirs.contains("src"));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.tree.len(), 5);
+    }
+
+    #[test]
+    fn h_on_a_file_moves_to_its_parent_dir() {
+        let mut app = nested_app();
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        assert!(matches!(app.selected_node(), Some(Node::File { .. })));
+        press(&mut app, KeyCode::Char('h'));
+        assert_eq!(app.selected_row, 1, "parent dir src/git");
+        press(&mut app, KeyCode::Char('h'));
+        assert_eq!(app.tree.len(), 4, "h on the expanded dir collapses it");
+    }
+
+    #[test]
+    fn h_collapses_an_expanded_dir_and_l_expands_it_back() {
+        let mut app = nested_app();
+        press(&mut app, KeyCode::Char('h'));
+        assert_eq!(app.tree.len(), 2);
+        // h on a collapsed root dir has no parent to jump to.
+        press(&mut app, KeyCode::Char('h'));
+        assert_eq!(app.selected_row, 0);
+        press(&mut app, KeyCode::Char('l'));
+        assert_eq!(app.tree.len(), 5);
+    }
+
+    #[test]
+    fn dir_selection_shows_the_aggregate_diff() {
+        let mut app = nested_app();
+        // Dir src aggregates app.rs + git/ops.rs (3 lines each, headers kept).
+        assert_eq!(app.display_lines().len(), 6);
+        press(&mut app, KeyCode::Char('j'));
+        // Dir src/git aggregates ops.rs only.
+        assert_eq!(app.display_lines().len(), 3);
+        press(&mut app, KeyCode::Char('j'));
+        // File row: header lines stripped (hunk header + addition).
+        assert_eq!(app.display_lines().len(), 2);
     }
 }

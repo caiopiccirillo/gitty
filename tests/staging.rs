@@ -10,6 +10,7 @@ use gitiff::git::{
     load_staged_diff, load_unstaged_diff, stage_file, stage_hunk, stage_lines, unstage_file,
     unstage_hunk, unstage_lines,
 };
+use gitiff::tree::Node;
 
 const BASE: &str = "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\n";
 
@@ -293,6 +294,33 @@ fn app_stages_the_visually_selected_lines() {
     assert_eq!(additions(&app.staged), vec!["L2"]);
     assert_eq!(additions(&app.unstaged), vec!["L4"]);
     assert_eq!(app.visual_anchor, None, "selection cleared after staging");
+}
+
+#[test]
+fn app_stages_a_whole_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(dir.path()).unwrap();
+    fs::create_dir(dir.path().join("d")).unwrap();
+    commit_file(&repo, dir.path(), "d/a.txt", BASE);
+    commit_file(&repo, dir.path(), "d/b.txt", BASE);
+    fs::write(dir.path().join("d/a.txt"), BASE.replacen("l1", "L1", 1)).unwrap();
+    fs::write(dir.path().join("d/b.txt"), BASE.replacen("l1", "L1", 1)).unwrap();
+
+    let mut app = App::load(dir.path()).unwrap();
+    // The first row is the "d" directory.
+    assert!(matches!(app.selected_node(), Some(Node::Dir { .. })));
+
+    app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+    assert_eq!(app.message, None);
+    assert!(app.unstaged.files.is_empty());
+    assert_eq!(app.staged.files.len(), 2);
+
+    app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert!(matches!(app.selected_node(), Some(Node::Dir { .. })));
+    app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+    assert_eq!(app.message, None);
+    assert!(app.staged.files.is_empty());
+    assert_eq!(app.unstaged.files.len(), 2);
 }
 
 #[test]
