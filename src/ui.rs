@@ -6,10 +6,10 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, HighlightSpacing, List, ListItem, Paragraph},
+    widgets::{Block, Clear, HighlightSpacing, List, ListItem, Paragraph},
 };
 
-use crate::app::{App, Focus, Tab};
+use crate::app::{App, CommitInput, Focus, Tab};
 use crate::diff::{FileStatus, HunkId, LineKind};
 use crate::tree::Node;
 
@@ -24,6 +24,35 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     render_files(frame, app, files_area);
     render_diff(frame, app, diff_area);
     frame.render_widget(status_bar(app), status_area);
+    if let Some(ref input) = app.commit_input {
+        render_commit_box(frame, input);
+    }
+}
+
+/// The centered commit-message box, with the terminal cursor inside it.
+fn render_commit_box(frame: &mut Frame, input: &CommitInput) {
+    let area = frame.area();
+    let width = 60.min(area.width);
+    let height = 3.min(area.height);
+    let rect = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, rect);
+    let block = Block::bordered().title(" Commit message ");
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+
+    // Scroll the text horizontally so the cursor stays visible.
+    let visible = (inner.width as usize).max(1);
+    let chars: Vec<char> = input.text.chars().collect();
+    let cursor = input.cursor_chars();
+    let start = (cursor + 1).saturating_sub(visible);
+    let text: String = chars.iter().skip(start).take(visible).collect();
+    frame.render_widget(Paragraph::new(text), inner);
+    frame.set_cursor_position((inner.x + (cursor - start) as u16, inner.y));
 }
 
 fn render_files(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -173,7 +202,12 @@ fn status_bar(app: &App) -> Paragraph<'static> {
         Style::new().fg(Color::Black).bg(Color::Gray),
     );
 
-    let right = if let Some(range) = app.selection_range() {
+    let right = if app.commit_input.is_some() {
+        Span::styled(
+            " Enter commit · Esc cancel ",
+            Style::new().fg(Color::Yellow),
+        )
+    } else if let Some(range) = app.selection_range() {
         let verb = match app.tab {
             Tab::Unstaged => "s stage",
             Tab::Staged => "u unstage",
@@ -196,13 +230,13 @@ fn status_bar(app: &App) -> Paragraph<'static> {
 
 fn hints(app: &App) -> &'static str {
     match (app.focus, app.tab) {
-        (Focus::Files, Tab::Unstaged) => " Tab · j/k · space stage · h/l fold · Enter · q quit ",
-        (Focus::Files, Tab::Staged) => " Tab · j/k · space unstage · h/l fold · Enter · q quit ",
+        (Focus::Files, Tab::Unstaged) => " Tab · j/k · space stage · h/l fold · c commit · q quit ",
+        (Focus::Files, Tab::Staged) => " Tab · j/k · space unstage · h/l fold · c commit · q quit ",
         (Focus::Diff, Tab::Unstaged) => {
-            " j/k line · n/p hunk · v select · s stage · h back · q quit "
+            " j/k line · n/p hunk · v select · s stage · c commit · q quit "
         }
         (Focus::Diff, Tab::Staged) => {
-            " j/k line · n/p hunk · v select · u unstage · h back · q quit "
+            " j/k line · n/p hunk · v select · u unstage · c commit · q quit "
         }
     }
 }
@@ -431,6 +465,19 @@ mod tests {
             !app.tree.iter().any(|n| matches!(n, Node::File { .. })),
             "file rows hidden after collapse"
         );
+    }
+
+    #[test]
+    fn renders_the_commit_box() {
+        let mut app = sample_app();
+        app.commit_input = Some(CommitInput {
+            text: "my message".into(),
+            cursor: 2,
+        });
+        let (screen, _) = render_app(&mut app, 80, 10);
+        assert!(screen.contains("Commit message"));
+        assert!(screen.contains("my message"));
+        assert!(screen.contains("Enter commit"));
     }
 
     #[test]

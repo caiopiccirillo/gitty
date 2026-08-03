@@ -115,6 +115,25 @@ pub fn unstage_file(path: &Path, file: &FileInfo) -> Result<()> {
     Ok(())
 }
 
+/// Commit the index on top of HEAD (or as the root commit on an unborn
+/// branch) with the user's configured identity. Returns the short id.
+pub fn commit(path: &Path, message: &str) -> Result<String> {
+    let repo = open_repo(path)?;
+    let mut index = repo.index()?;
+    let tree = repo.find_tree(index.write_tree()?)?;
+    let sig = repo
+        .signature()
+        .context("git identity not configured (user.name/user.email)")?;
+    let parent = match repo.head() {
+        Ok(head) => Some(head.peel_to_commit()?),
+        Err(e) if e.code() == git2::ErrorCode::UnbornBranch => None,
+        Err(e) => return Err(e.into()),
+    };
+    let parents: Vec<&git2::Commit> = parent.iter().collect();
+    let oid = repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)?;
+    Ok(oid.to_string()[..7].to_string())
+}
+
 fn open_repo(path: &Path) -> Result<Repository> {
     Repository::discover(path)
         .with_context(|| format!("no git repository found at or above {}", path.display()))

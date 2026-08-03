@@ -57,6 +57,8 @@ pub struct App {
     pub visual_anchor: Option<usize>,
     /// Scroll offset of the diff pane, relative to the displayed lines.
     pub scroll: usize,
+    /// The commit message being typed (`c`), if the commit box is open.
+    pub commit_input: Option<CommitInput>,
     /// One-off feedback shown in the status bar (e.g. staging errors).
     pub message: Option<String>,
     viewport_height: usize,
@@ -98,6 +100,7 @@ impl App {
             cursor: 0,
             visual_anchor: None,
             scroll: 0,
+            commit_input: None,
             message: None,
             viewport_height: 0,
             repo_path,
@@ -383,6 +386,33 @@ impl App {
         }
     }
 
+    /// Open the commit message box (`c`), if there is anything staged.
+    pub fn open_commit(&mut self) {
+        if self.staged.files.is_empty() {
+            self.message = Some("nothing staged".into());
+        } else {
+            self.commit_input = Some(CommitInput::default());
+        }
+    }
+
+    /// Commit the staged changes with the typed message and close the box.
+    pub fn commit(&mut self) {
+        let Some(input) = self.commit_input.take() else {
+            return;
+        };
+        let message = input.text.trim().to_string();
+        if message.is_empty() {
+            self.message = Some("empty commit message".into());
+            return;
+        }
+        self.message = match git::commit(&self.repo_path, &message)
+            .and_then(|short| self.refresh().map(|()| format!("committed {short}")))
+        {
+            Ok(msg) => Some(msg),
+            Err(e) => Some(format!("commit failed: {e}")),
+        };
+    }
+
     /// Swap in new diffs, preserving the selection and cursor by path.
     /// No-op when nothing changed.
     fn apply_refreshed(&mut self, unstaged: DiffView, staged: DiffView) {
@@ -436,6 +466,53 @@ impl App {
 enum NodeIdentity {
     Dir(String),
     File(String),
+}
+
+/// Text of the commit message box with a byte-offset cursor that always
+/// sits on a char boundary.
+#[derive(Debug, Default)]
+pub struct CommitInput {
+    pub text: String,
+    pub cursor: usize,
+}
+
+impl CommitInput {
+    fn insert(&mut self, c: char) {
+        self.text.insert(self.cursor, c);
+        self.cursor += c.len_utf8();
+    }
+
+    fn backspace(&mut self) {
+        if let Some(prev) = self.prev_boundary() {
+            self.text.replace_range(prev..self.cursor, "");
+            self.cursor = prev;
+        }
+    }
+
+    fn left(&mut self) {
+        if let Some(prev) = self.prev_boundary() {
+            self.cursor = prev;
+        }
+    }
+
+    fn right(&mut self) {
+        self.cursor = self.text[self.cursor..]
+            .chars()
+            .next()
+            .map_or(self.text.len(), |c| self.cursor + c.len_utf8());
+    }
+
+    fn prev_boundary(&self) -> Option<usize> {
+        self.text[..self.cursor]
+            .char_indices()
+            .last()
+            .map(|(i, _)| i)
+    }
+
+    /// Cursor position in characters (for rendering).
+    pub fn cursor_chars(&self) -> usize {
+        self.text[..self.cursor].chars().count()
+    }
 }
 
 /// A file's diff lines without its file-header lines.
@@ -659,6 +736,30 @@ mod tests {
         assert_eq!(app.selected_row, 0);
         press(&mut app, KeyCode::Char('l'));
         assert_eq!(app.tree.len(), 5);
+    }
+
+    #[test]
+    fn commit_input_edits_text_at_char_boundaries() {
+        let mut input = CommitInput::default();
+        for c in "héllo".chars() {
+            input.insert(c);
+        }
+        input.left();
+        input.left();
+        input.left();
+        input.backspace();
+        assert_eq!(input.text, "hllo", "backspace removed the multibyte é");
+        assert_eq!(input.cursor, 1);
+        input.insert('e');
+        assert_eq!(input.text, "hello");
+        for _ in 0..4 {
+            input.right();
+        }
+        input.insert('!');
+        assert_eq!(input.text, "hello!");
+        input.left();
+        input.backspace();
+        assert_eq!(input.text, "hell!", "removes the char before the cursor");
     }
 
     #[test]

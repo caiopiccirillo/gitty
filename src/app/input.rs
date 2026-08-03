@@ -7,15 +7,44 @@ use super::*;
 impl App {
     pub fn handle_key(&mut self, key: KeyEvent) {
         self.message = None;
+        if self.commit_input.is_some() {
+            self.handle_commit_key(key);
+            return;
+        }
         match (key.modifiers, key.code) {
             (_, KeyCode::Char('q')) | (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
                 self.should_quit = true;
             }
             (_, KeyCode::Tab) => self.switch_tab(),
+            (_, KeyCode::Char('c')) => self.open_commit(),
             _ => match self.focus {
                 Focus::Files => self.handle_files_key(key),
                 Focus::Diff => self.handle_diff_key(key),
             },
+        }
+    }
+
+    /// Keys while the commit message box is open.
+    fn handle_commit_key(&mut self, key: KeyEvent) {
+        let Some(input) = self.commit_input.as_mut() else {
+            return;
+        };
+        match (key.modifiers, key.code) {
+            (_, KeyCode::Esc) => self.commit_input = None,
+            (_, KeyCode::Enter) => self.commit(),
+            (_, KeyCode::Left) => input.left(),
+            (_, KeyCode::Right) => input.right(),
+            (_, KeyCode::Home) => input.cursor = 0,
+            (_, KeyCode::End) => input.cursor = input.text.len(),
+            (_, KeyCode::Backspace) => input.backspace(),
+            (KeyModifiers::CONTROL, KeyCode::Char('u')) => {
+                input.text.clear();
+                input.cursor = 0;
+            }
+            (m, KeyCode::Char(c)) if m.is_empty() || m == KeyModifiers::SHIFT => {
+                input.insert(c);
+            }
+            _ => {}
         }
     }
 
