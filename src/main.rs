@@ -8,10 +8,10 @@ use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use gitiff::app::App;
 use gitiff::ui;
 
-/// How often the diffs are reloaded when the user is idle. git2 hashing the
-/// workdir is cheap for typical repositories; the refresh is a no-op when
-/// nothing changed, so this only costs a diff computation per tick.
-const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
+/// Idle-tick interval: how often the loop wakes to apply finished
+/// background refreshes. Key events wake it immediately; the actual diff
+/// computation happens off-thread (see `refresh.rs`).
+const TICK: Duration = Duration::from_millis(250);
 
 fn main() -> Result<()> {
     let path = PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| ".".into()));
@@ -26,15 +26,13 @@ fn main() -> Result<()> {
 fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
     while !app.should_quit {
         terminal.draw(|frame| ui::render(frame, app))?;
-        if event::poll(REFRESH_INTERVAL)? {
-            if let Event::Key(key) = event::read()?
-                && key.kind == KeyEventKind::Press
-            {
-                app.handle_key(key);
-            }
-        } else {
-            app.auto_refresh();
+        if event::poll(TICK)?
+            && let Event::Key(key) = event::read()?
+            && key.kind == KeyEventKind::Press
+        {
+            app.handle_key(key);
         }
+        app.poll_refresh();
     }
     Ok(())
 }

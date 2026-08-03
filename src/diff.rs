@@ -79,7 +79,7 @@ pub struct DiffLine {
 }
 
 /// A full diff as a flat list of lines plus per-file metadata.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct DiffView {
     pub lines: Vec<DiffLine>,
     pub files: Vec<FileInfo>,

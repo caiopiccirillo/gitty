@@ -11,12 +11,16 @@ mod input;
 use std::collections::HashSet;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
 
 use anyhow::Result;
 use ratatui::widgets::ListState;
 
 use crate::diff::{DiffLine, DiffView, FileInfo, HunkId, LineKind, SelectedLines};
 use crate::git;
+use crate::refresh::{self, RefreshOutcome};
 use crate::tree::{self, Node};
 
 /// Which side of the staging area is shown.
@@ -58,16 +62,27 @@ pub struct App {
     viewport_height: usize,
     repo_path: PathBuf,
     pub should_quit: bool,
+    /// Bumped on every mutation; background snapshots stamped with an older
+    /// epoch are discarded as stale.
+    epoch: Arc<AtomicU64>,
+    /// Channel of the background refresh worker (`None` in tests).
+    refresh_rx: Option<mpsc::Receiver<RefreshOutcome>>,
 }
 
 impl App {
-    /// Load both diffs of the repository containing `repo_path`.
+    /// Load both diffs of the repository containing `repo_path` and spawn
+    /// the background refresh worker.
     pub fn load(repo_path: &Path) -> Result<Self> {
-        Ok(Self::new(
+        let mut app = Self::new(
             git::load_unstaged_diff(repo_path)?,
             git::load_staged_diff(repo_path)?,
             repo_path.to_path_buf(),
-        ))
+        );
+        app.refresh_rx = Some(refresh::spawn(
+            repo_path.to_path_buf(),
+            Arc::clone(&app.epoch),
+        ));
+        Ok(app)
     }
 
     pub fn new(unstaged: DiffView, staged: DiffView, repo_path: PathBuf) -> Self {
@@ -87,6 +102,8 @@ impl App {
             viewport_height: 0,
             repo_path,
             should_quit: false,
+            epoch: Arc::new(AtomicU64::new(0)),
+            refresh_rx: None,
         };
         app.rebuild_tree();
         app
@@ -329,13 +346,48 @@ impl App {
         };
     }
 
-    /// Reload both diffs from disk, preserving the selection and cursor by
-    /// path. No-op when nothing changed.
+    /// Reload both diffs from disk (synchronously, after a mutation) and
+    /// invalidate any background snapshot still in flight.
     pub fn refresh(&mut self) -> Result<()> {
+        self.epoch.fetch_add(1, Ordering::SeqCst);
         let unstaged = git::load_unstaged_diff(&self.repo_path)?;
         let staged = git::load_staged_diff(&self.repo_path)?;
+        self.apply_refreshed(unstaged, staged);
+        Ok(())
+    }
+
+    /// Apply any finished background snapshot (called on idle ticks; cheap
+    /// no-op when the channel is empty).
+    pub fn poll_refresh(&mut self) {
+        if self.visual_anchor.is_some() {
+            return; // apply later, when the selection is done
+        }
+        let Some(rx) = &self.refresh_rx else {
+            return;
+        };
+        let mut latest = None;
+        while let Ok(outcome) = rx.try_recv() {
+            latest = Some(outcome);
+        }
+        if let Some(outcome) = latest
+            && outcome.epoch >= self.epoch.load(Ordering::SeqCst)
+        {
+            self.apply_refreshed(outcome.unstaged, outcome.staged);
+        }
+    }
+
+    /// Synchronous refresh used by tests and explicit calls.
+    pub fn auto_refresh(&mut self) {
+        if self.visual_anchor.is_none() {
+            let _ = self.refresh();
+        }
+    }
+
+    /// Swap in new diffs, preserving the selection and cursor by path.
+    /// No-op when nothing changed.
+    fn apply_refreshed(&mut self, unstaged: DiffView, staged: DiffView) {
         if unstaged == self.unstaged && staged == self.staged {
-            return Ok(());
+            return;
         }
         let identity = self.selected_node().map(|n| self.identity_of(n));
         let (cursor, scroll) = (self.cursor, self.scroll);
@@ -356,15 +408,6 @@ impl App {
             self.scroll = 0;
         }
         self.clamp_cursor();
-        Ok(())
-    }
-
-    /// Refresh from disk changes, unless the user is mid-selection
-    /// (auto-refresh on the event loop's idle tick).
-    pub fn auto_refresh(&mut self) {
-        if self.visual_anchor.is_none() {
-            let _ = self.refresh();
-        }
     }
 
     /// Path-based identity of a tree row, so it can be re-found after a

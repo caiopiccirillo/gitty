@@ -107,6 +107,29 @@ fn auto_refresh_skips_during_visual_selection() {
 }
 
 #[test]
+fn background_worker_delivers_changes_off_thread() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(dir.path()).unwrap();
+    commit_file(&repo, dir.path(), "f.txt", BASE);
+
+    // App::load spawns the background worker (1s interval).
+    let mut app = App::load(dir.path()).unwrap();
+    assert!(app.unstaged.files.is_empty());
+
+    fs::write(dir.path().join("f.txt"), BASE.replacen("l1", "L1", 1)).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while app.unstaged.files.is_empty() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        app.poll_refresh();
+    }
+    assert_eq!(
+        app.unstaged.files.len(),
+        1,
+        "background worker delivered the change"
+    );
+}
+
+#[test]
 fn refresh_is_a_noop_when_nothing_changed() {
     let dir = tempfile::tempdir().unwrap();
     let repo = Repository::init(dir.path()).unwrap();
