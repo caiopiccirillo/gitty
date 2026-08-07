@@ -294,10 +294,9 @@ mod tests {
                 line(LineKind::HunkHeader, 0, Some(0), "@@ -1 +1 @@"),
                 line(LineKind::Addition, 0, Some(0), "alpha"),
                 line(LineKind::FileHeader, 1, None, "diff --git a/b.txt b/b.txt"),
-                line(LineKind::HunkHeader, 1, Some(0), "@@ -1 +1 @@"),
+                line(LineKind::HunkHeader, 1, Some(0), "@@ -1,2 +1,2 @@"),
                 line(LineKind::Addition, 1, Some(0), "beta1"),
-                line(LineKind::HunkHeader, 1, Some(1), "@@ -5 +5 @@"),
-                line(LineKind::Deletion, 1, Some(1), "beta2"),
+                line(LineKind::Deletion, 1, Some(0), "beta2"),
             ],
             files: vec![
                 FileInfo {
@@ -399,15 +398,17 @@ mod tests {
     #[test]
     fn visual_selection_highlights_the_range() {
         let mut app = sample_app();
+        // File b displays: [@@, +beta1, -beta2]; select both changes.
+        press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Enter);
         press(&mut app, KeyCode::Char('v'));
         press(&mut app, KeyCode::Char('j'));
         let (screen, buffer) = render_app(&mut app, 80, 10);
         assert!(screen.contains("visual: 2 line(s)"));
-        // The anchored @@ line is part of the selection...
-        assert_eq!(buffer[(25, 1)].bg, Color::DarkGray);
+        // The anchored changed line is part of the selection...
+        assert_eq!(buffer[(25, 2)].bg, Color::DarkGray);
         // ...and the cursor end is lighter.
-        assert_eq!(buffer[(25, 2)].bg, Color::Gray);
+        assert_eq!(buffer[(25, 3)].bg, Color::Gray);
     }
 
     #[test]

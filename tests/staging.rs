@@ -265,11 +265,10 @@ fn app_stages_the_visually_selected_lines() {
     let dir = repo_with_close_changes();
     let mut app = App::load(dir.path()).unwrap();
 
-    // Display: [@@, ctx l1, -l2, +L2, ctx l3, -l4, +L4, ...].
-    // Select -l2..+L2 (the whole l2 change) and stage it.
+    // Display: [@@, ctx l1, -l2, +L2, ctx l3, -l4, +L4, ...]. Enter lands on
+    // the first changed line (-l2); select -l2..+L2 (the whole l2 change)
+    // and stage it.
     app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
-    app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
     app.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
     app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
     app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));

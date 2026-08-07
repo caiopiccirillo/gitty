@@ -106,10 +106,10 @@ Diff pane:
 
 | Key                     | Action                                   |
 | ----------------------- | ---------------------------------------- |
-| `j` `k` / `↓` `↑`       | Move the cursor                          |
+| `j` `k` / `↓` `↑`       | Move to the next / previous changed line |
 | `Ctrl+D` `Ctrl+U`       | Move down / up half a page               |
 | `PgDn` `PgUp`           | Move down / up a page                    |
-| `g` `G`                 | Jump to the first / last line            |
+| `g` `G`                 | Jump to the first / last changed line    |
 | `n` `p`                 | Jump to the next / previous hunk         |
 | `v`                     | Start or end a visual line selection     |
 | `s`                     | Stage the hunk (or the selected lines)   |
@@ -117,8 +117,9 @@ Diff pane:
 | `h` / `←`               | Back to the files pane                   |
 | `Esc`                   | Cancel the selection, then back to files |
 
-A visual selection (`v`) cannot leave its hunk, so it always maps to a
-single, well-formed patch.
+The cursor moves between changed lines only (`+`/`-`), and when you open a
+file it lands on its first change. A visual selection (`v`) cannot leave its
+hunk, so it always maps to a single, well-formed patch.
 
 ## Development
 

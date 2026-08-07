@@ -76,7 +76,10 @@ impl App {
     fn files_activate(&mut self) {
         match self.selected_node().cloned() {
             Some(Node::Dir { path, .. }) => self.toggle_dir(&path),
-            Some(Node::File { .. }) => self.focus = Focus::Diff,
+            Some(Node::File { .. }) => {
+                self.focus = Focus::Diff;
+                self.snap_to_first_change();
+            }
             None => {}
         }
     }
@@ -91,7 +94,10 @@ impl App {
                     self.set_dir_collapsed(&path, false);
                 }
             }
-            Some(Node::File { .. }) => self.focus = Focus::Diff,
+            Some(Node::File { .. }) => {
+                self.focus = Focus::Diff;
+                self.snap_to_first_change();
+            }
             None => {}
         }
     }
@@ -154,14 +160,8 @@ impl App {
             (KeyModifiers::CONTROL, KeyCode::Char('u')) => {
                 self.move_cursor(-(self.viewport_height as isize / 2));
             }
-            (_, KeyCode::Home) | (_, KeyCode::Char('g')) => {
-                self.cursor = self.cursor_bounds().start;
-                self.clamp_cursor();
-            }
-            (_, KeyCode::End) | (_, KeyCode::Char('G')) => {
-                self.cursor = self.cursor_bounds().end.saturating_sub(1);
-                self.clamp_cursor();
-            }
+            (_, KeyCode::Home) | (_, KeyCode::Char('g')) => self.move_to_edge(true),
+            (_, KeyCode::End) | (_, KeyCode::Char('G')) => self.move_to_edge(false),
             (_, KeyCode::Char('n')) => self.jump_hunk(1),
             (_, KeyCode::Char('p')) => self.jump_hunk(-1),
             (_, KeyCode::Char('v')) => self.toggle_visual(),
@@ -212,6 +212,7 @@ impl App {
         self.cursor = 0;
         self.scroll = 0;
         self.visual_anchor = None;
+        self.snap_to_first_change();
     }
 
     fn select_row(&mut self, idx: usize) {
@@ -220,6 +221,7 @@ impl App {
         self.cursor = 0;
         self.scroll = 0;
         self.visual_anchor = None;
+        self.snap_to_first_change();
     }
 
     fn move_row(&mut self, delta: isize) {
@@ -230,8 +232,8 @@ impl App {
         self.select_row(next as usize);
     }
 
-    /// Move the cursor through the file's diff; line-wise movement freely
-    /// traverses hunks (n/p jump directly to hunk headers). While a visual
+    /// Move the cursor across the changed lines (`+`/`-`) of the diff;
+    /// `delta` counts changed lines, not display lines. While a visual
     /// selection is active the cursor stays inside its hunk so the selection
     /// always maps to a single, well-formed patch.
     fn move_cursor(&mut self, delta: isize) {
@@ -239,9 +241,38 @@ impl App {
         if bounds.is_empty() {
             return;
         }
-        self.cursor = (self.cursor as isize + delta)
-            .clamp(bounds.start as isize, bounds.end as isize - 1) as usize;
+        let (start, end) = (bounds.start, bounds.end);
+        let lines = self.display_lines();
+        let positions = changed_positions(&lines[start..end]);
+        if positions.is_empty() {
+            return;
+        }
+        let current = positions
+            .binary_search(&self.cursor.saturating_sub(start))
+            .unwrap_or_else(|i| i.saturating_sub(1));
+        let next = (current as isize + delta).clamp(0, positions.len() as isize - 1) as usize;
+        self.cursor = start + positions[next];
         self.clamp_cursor();
+    }
+
+    /// Jump to the first or last changed line of the current bounds.
+    fn move_to_edge(&mut self, first: bool) {
+        let bounds = self.cursor_bounds();
+        if bounds.is_empty() {
+            return;
+        }
+        let (start, end) = (bounds.start, bounds.end);
+        let lines = self.display_lines();
+        let positions = changed_positions(&lines[start..end]);
+        let edge = if first {
+            positions.first()
+        } else {
+            positions.last()
+        };
+        if let Some(&rel) = edge {
+            self.cursor = start + rel;
+            self.clamp_cursor();
+        }
     }
 
     /// Lines the cursor may roam: the whole file diff normally, only the
@@ -277,27 +308,26 @@ impl App {
         start..end
     }
 
-    /// Move the cursor to the next/previous hunk header within the file.
+    /// Move the cursor to the first changed line of the next/previous hunk.
     fn jump_hunk(&mut self, direction: isize) {
         let lines = self.display_lines();
-        let is_header = |(_, line): &(usize, &&DiffLine)| line.kind == LineKind::HunkHeader;
+        let hunks = hunk_first_changed_positions(&lines);
         let target = if direction > 0 {
-            lines
-                .iter()
-                .enumerate()
-                .skip(self.cursor + 1)
-                .find(is_header)
-                .map(|(i, _)| i)
+            hunks.iter().copied().find(|&pos| pos > self.cursor)
         } else {
-            lines
-                .iter()
-                .enumerate()
-                .take(self.cursor)
-                .rfind(is_header)
-                .map(|(i, _)| i)
+            hunks.iter().copied().rev().find(|&pos| pos < self.cursor)
         };
-        if let Some(i) = target {
-            self.cursor = i;
+        if let Some(pos) = target {
+            self.cursor = pos;
+            self.clamp_cursor();
+        }
+    }
+
+    /// Land the cursor on the first changed line of the displayed diff.
+    fn snap_to_first_change(&mut self) {
+        let lines = self.display_lines();
+        if let Some(&pos) = changed_positions(&lines).first() {
+            self.cursor = pos;
             self.clamp_cursor();
         }
     }
@@ -324,4 +354,34 @@ impl App {
         }
         self.scroll = self.scroll.min(len.saturating_sub(self.viewport_height));
     }
+}
+
+/// Positions of the changed lines (`+`/`-`) within a slice of displayed
+/// lines, in display order.
+fn changed_positions(lines: &[&DiffLine]) -> Vec<usize> {
+    lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| matches!(line.kind, LineKind::Addition | LineKind::Deletion))
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Display-line position of the first changed line of each hunk, in display
+/// order. Hunks are identified by `(file, hunk)` so directory aggregates
+/// with repeated hunk indices stay correct.
+fn hunk_first_changed_positions(lines: &[&DiffLine]) -> Vec<usize> {
+    let mut positions = Vec::new();
+    let mut seen: Option<(usize, usize)> = None;
+    for (i, line) in lines.iter().enumerate() {
+        let Some(hunk_idx) = line.hunk_idx else {
+            continue;
+        };
+        let key = (line.file_idx, hunk_idx);
+        if seen != Some(key) && matches!(line.kind, LineKind::Addition | LineKind::Deletion) {
+            positions.push(i);
+            seen = Some(key);
+        }
+    }
+    positions
 }

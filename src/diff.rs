@@ -155,7 +155,7 @@ pub(crate) fn two_file_view() -> DiffView {
             line(LineKind::Addition, 0, Some(0)),
             line(LineKind::FileHeader, 1, None),
             line(LineKind::HunkHeader, 1, Some(0)),
-            line(LineKind::Context, 1, Some(0)),
+            line(LineKind::Deletion, 1, Some(0)),
             line(LineKind::HunkHeader, 1, Some(1)),
             line(LineKind::Deletion, 1, Some(1)),
         ],

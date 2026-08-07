@@ -582,18 +582,18 @@ mod tests {
     #[test]
     fn n_and_p_jump_between_hunks_of_the_file() {
         let mut app = test_app();
-        // File 1 displays: [hunk0 header, context, hunk1 header, deletion].
+        // File 1 displays: [hunk0 header, deletion, hunk1 header, deletion].
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Enter);
-        assert_eq!(app.cursor, 0);
+        assert_eq!(app.cursor, 1, "snaps to the first changed line");
         press(&mut app, KeyCode::Char('n'));
-        assert_eq!(app.cursor, 2);
+        assert_eq!(app.cursor, 3, "lands on the next hunk's changed line");
         press(&mut app, KeyCode::Char('n'));
-        assert_eq!(app.cursor, 2, "no next hunk");
+        assert_eq!(app.cursor, 3, "no next hunk");
         press(&mut app, KeyCode::Char('p'));
-        assert_eq!(app.cursor, 0);
+        assert_eq!(app.cursor, 1);
         press(&mut app, KeyCode::Char('p'));
-        assert_eq!(app.cursor, 0, "no previous hunk");
+        assert_eq!(app.cursor, 1, "no previous hunk");
     }
 
     #[test]
@@ -621,20 +621,18 @@ mod tests {
     }
 
     #[test]
-    fn cursor_traverses_hunks_freely() {
+    fn cursor_traverses_changed_lines_freely() {
         let mut app = test_app();
-        // File 1 displays: [hunk0 header, context, hunk1 header, deletion].
+        // File 1 displays: [hunk0 header, deletion, hunk1 header, deletion].
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Enter);
+        assert_eq!(app.cursor, 1, "snaps to the first changed line");
         press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.cursor, 3, "j jumps to the next changed line");
         press(&mut app, KeyCode::Char('j'));
-        assert_eq!(app.cursor, 2, "j crosses into the next hunk");
-        press(&mut app, KeyCode::Char('j'));
-        assert_eq!(app.cursor, 3);
-        press(&mut app, KeyCode::Char('j'));
-        assert_eq!(app.cursor, 3, "clamped at the last line");
+        assert_eq!(app.cursor, 3, "clamped at the last changed line");
         press(&mut app, KeyCode::Char('k'));
-        assert_eq!(app.cursor, 2);
+        assert_eq!(app.cursor, 1);
     }
 
     #[test]
@@ -647,8 +645,8 @@ mod tests {
         assert_eq!(app.cursor, 3);
         assert_eq!(app.scroll, 3);
         press(&mut app, KeyCode::Char('g'));
-        assert_eq!(app.cursor, 0);
-        assert_eq!(app.scroll, 0);
+        assert_eq!(app.cursor, 1);
+        assert_eq!(app.scroll, 1);
     }
 
     #[test]
@@ -657,11 +655,13 @@ mod tests {
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Enter);
         press(&mut app, KeyCode::Char('v'));
-        assert_eq!(app.selection_range(), Some(0..1));
+        assert_eq!(app.selection_range(), Some(1..2));
         press(&mut app, KeyCode::Char('j'));
-        assert_eq!(app.selection_range(), Some(0..2));
-        press(&mut app, KeyCode::Char('j'));
-        assert_eq!(app.cursor, 1, "selection cannot leave its hunk");
+        assert_eq!(
+            app.selection_range(),
+            Some(1..2),
+            "the hunk has only one changed line"
+        );
         press(&mut app, KeyCode::Esc);
         assert_eq!(app.visual_anchor, None);
         assert_eq!(app.focus, Focus::Diff, "Esc only cancels the selection");
