@@ -15,7 +15,7 @@ use gix::status::plumbing::index_as_worktree::{Change, EntryStatus};
 
 use crate::diff::{DiffView, FileStatus};
 
-use super::model::{FileDiff, Hunk, kind_of};
+use super::model::{FileDiff, Hunk, kind_of, mode_from_fs};
 use super::open_repo;
 use super::render::diff_to_view;
 
@@ -187,16 +187,22 @@ fn diff_worktree(
     set_resource(repo, cache, path.as_bstr(), old_id, old_mode, ResourceKind::OldOrSource)?;
     // The new side is read from the worktree; its kind is only used to tell
     // symlinks apart from regular files.
-    let new_kind_mode = new_mode.unwrap_or(if old_mode == Some(Mode::SYMLINK) {
-        Mode::SYMLINK
-    } else {
-        Mode::FILE
-    });
+    let fs_mode = worktree_mode_of(repo, path.as_bstr());
+    let new_kind_mode = new_mode.or(fs_mode).unwrap_or(Mode::FILE);
     set_resource(repo, cache, path.as_bstr(), None, Some(new_kind_mode), ResourceKind::NewOrDestination)?;
-    let mut file = FileDiff::new(path.as_bstr(), old_id, old_mode, None, None);
+    let mut file = FileDiff::new(path.as_bstr(), old_id, old_mode, None, new_mode.or(fs_mode));
     file.status = status;
     collect_diff(cache, &mut file)?;
     Ok(file)
+}
+
+/// The index mode the worktree file at `rela` would get, or `None` if it
+/// doesn't exist (which is also the case for the mode of a type change,
+/// where the caller provides it explicitly).
+fn worktree_mode_of(repo: &gix::Repository, rela: &BStr) -> Option<Mode> {
+    let full = repo.workdir()?.join(gix::path::from_bstr(rela));
+    let metadata = gix::index::fs::Metadata::from_path_no_follow(&full).ok()?;
+    Some(mode_from_fs(&metadata, metadata.is_symlink()))
 }
 
 fn set_resource(
