@@ -167,3 +167,203 @@ fn short_id(id: gix::ObjectId) -> String {
 fn zeros(id: gix::ObjectId) -> String {
     "0".repeat(id.kind().len_in_hex().min(7))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gix::diff::blob::unified_diff::HunkHeader;
+
+    use crate::git::model::Hunk;
+
+    /// A SHA-1 object id from a short hex prefix, padded with zeros.
+    fn oid(prefix: &str) -> gix::ObjectId {
+        let hex = format!("{prefix}{}", "0".repeat(40 - prefix.len()));
+        gix::ObjectId::from_hex(hex.as_bytes()).unwrap()
+    }
+
+    fn header(before_start: u32, before_len: u32, after_start: u32, after_len: u32) -> HunkHeader {
+        HunkHeader {
+            before_hunk_start: before_start,
+            before_hunk_len: before_len,
+            after_hunk_start: after_start,
+            after_hunk_len: after_len,
+        }
+    }
+
+    fn hunk(header: HunkHeader, lines: Vec<(DiffLineKind, Vec<u8>)>) -> Hunk {
+        Hunk { header, lines }
+    }
+
+    fn modified_file() -> FileDiff {
+        FileDiff::new(
+            BStr::new(b"f.txt"),
+            Some(oid("a")),
+            Some(Mode::FILE),
+            Some(oid("b")),
+            Some(Mode::FILE),
+        )
+    }
+
+    #[test]
+    fn derives_section_headings_like_git() {
+        assert_eq!(section_of(BStr::new(b"fn main()")), Some("fn main()".into()));
+        assert_eq!(section_of(BStr::new(b"")), None);
+        assert_eq!(section_of(BStr::new(b"  indented")), None);
+        assert_eq!(section_of(BStr::new(b"# comment")), None);
+        let long = "x".repeat(100);
+        assert_eq!(section_of(BStr::new(long.as_bytes())).unwrap().len(), 80);
+    }
+
+    #[test]
+    fn formats_hunk_headers_with_and_without_section() {
+        let with_section = hunk(
+            header(1, 3, 2, 4),
+            vec![
+                (DiffLineKind::Context, b"fn main()".to_vec()),
+                (DiffLineKind::Remove, b"old".to_vec()),
+            ],
+        );
+        assert_eq!(hunk_header_line(&with_section), "@@ -1,3 +2,4 @@ fn main()");
+
+        let without_section = hunk(header(1, 3, 2, 4), vec![(DiffLineKind::Remove, b"old".to_vec())]);
+        assert_eq!(hunk_header_line(&without_section), "@@ -1,3 +2,4 @@");
+    }
+
+    #[test]
+    fn headers_for_an_added_file() {
+        let file = FileDiff::new(BStr::new(b"new.txt"), None, None, Some(oid("abcdef1")), Some(Mode::FILE));
+        assert_eq!(
+            file_headers(&file),
+            vec![
+                "diff --git a/new.txt b/new.txt",
+                "new file mode 100644",
+                "index 0000000..abcdef1",
+                "--- /dev/null",
+                "+++ b/new.txt",
+            ]
+        );
+    }
+
+    #[test]
+    fn headers_for_a_deleted_file() {
+        let file = FileDiff::new(BStr::new(b"old.txt"), Some(oid("deadbee")), Some(Mode::FILE), None, None);
+        assert_eq!(
+            file_headers(&file),
+            vec![
+                "diff --git a/old.txt b/old.txt",
+                "deleted file mode 100644",
+                "index deadbee..0000000",
+                "--- a/old.txt",
+                "+++ /dev/null",
+            ]
+        );
+    }
+
+    #[test]
+    fn headers_for_a_modified_file_with_unchanged_mode() {
+        let file = modified_file();
+        assert_eq!(
+            file_headers(&file),
+            vec![
+                "diff --git a/f.txt b/f.txt",
+                "index a000000..b000000 100644",
+                "--- a/f.txt",
+                "+++ b/f.txt",
+            ]
+        );
+    }
+
+    #[test]
+    fn headers_for_a_mode_change() {
+        let file = FileDiff::new(
+            BStr::new(b"f.txt"),
+            Some(oid("a")),
+            Some(Mode::FILE),
+            Some(oid("b")),
+            Some(Mode::FILE_EXECUTABLE),
+        );
+        assert_eq!(
+            file_headers(&file),
+            vec![
+                "diff --git a/f.txt b/f.txt",
+                "old mode 100644",
+                "new mode 100755",
+                "index a000000..b000000",
+                "--- a/f.txt",
+                "+++ b/f.txt",
+            ]
+        );
+    }
+
+    #[test]
+    fn headers_for_a_type_change() {
+        let file = FileDiff::new(
+            BStr::new(b"f.txt"),
+            Some(oid("a")),
+            Some(Mode::SYMLINK),
+            Some(oid("b")),
+            Some(Mode::FILE),
+        );
+        assert_eq!(
+            file_headers(&file),
+            vec![
+                "diff --git a/f.txt b/f.txt",
+                "old mode 120000",
+                "new mode 100644",
+                "index a000000..b000000",
+                "--- a/f.txt",
+                "+++ b/f.txt",
+            ]
+        );
+    }
+
+    #[test]
+    fn renders_lines_with_kinds_and_hunk_tags() {
+        let mut file = modified_file();
+        file.hunks = vec![hunk(
+            header(1, 3, 1, 3),
+            vec![
+                (DiffLineKind::Context, b"ctx".to_vec()),
+                (DiffLineKind::Remove, b"old".to_vec()),
+                (DiffLineKind::Add, b"new".to_vec()),
+            ],
+        )];
+        let view = diff_to_view(&[file]);
+
+        let kinds: Vec<LineKind> = view.lines.iter().map(|l| l.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                LineKind::FileHeader, // diff --git
+                LineKind::FileHeader, // index
+                LineKind::FileHeader, // ---
+                LineKind::FileHeader, // +++
+                LineKind::HunkHeader,
+                LineKind::Context,
+                LineKind::Deletion,
+                LineKind::Addition,
+            ]
+        );
+        for (i, line) in view.lines.iter().enumerate() {
+            assert_eq!(line.file_idx, 0);
+            assert_eq!(line.hunk_idx, (i >= 4).then_some(0));
+        }
+        assert_eq!(view.files.len(), 1);
+        assert_eq!(view.files[0].path, "f.txt");
+    }
+
+    #[test]
+    fn renders_binary_files_as_a_placeholder() {
+        let mut file = modified_file();
+        file.binary = true;
+        let view = diff_to_view(&[file]);
+        let meta: Vec<&str> = view
+            .lines
+            .iter()
+            .filter(|l| l.kind == LineKind::Meta)
+            .map(|l| l.content.as_str())
+            .collect();
+        assert_eq!(meta, vec!["Binary files a/f.txt and b/f.txt differ"]);
+        assert!(view.lines.iter().all(|l| l.hunk_idx.is_none()));
+    }
+}

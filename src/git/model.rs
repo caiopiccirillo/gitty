@@ -150,3 +150,86 @@ pub(super) fn mode_from_fs(metadata: &gix::index::fs::Metadata, is_symlink: bool
         Mode::FILE
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gix::diff::blob::unified_diff::HunkHeader;
+
+    /// A SHA-1 object id from a short hex prefix, padded with zeros.
+    fn oid(prefix: &str) -> gix::ObjectId {
+        let hex = format!("{prefix}{}", "0".repeat(40 - prefix.len()));
+        gix::ObjectId::from_hex(hex.as_bytes()).unwrap()
+    }
+
+    fn hunk(header: HunkHeader) -> Hunk {
+        Hunk {
+            header,
+            lines: vec![
+                (DiffLineKind::Context, b"ctx\n".to_vec()),
+                (DiffLineKind::Remove, b"old\n".to_vec()),
+                (DiffLineKind::Add, b"new\n".to_vec()),
+            ],
+        }
+    }
+
+    #[test]
+    fn classifies_staged_statuses_from_modes() {
+        assert_eq!(classify(None, Some(Mode::FILE)), FileStatus::Added);
+        assert_eq!(classify(Some(Mode::FILE), None), FileStatus::Deleted);
+        assert_eq!(
+            classify(Some(Mode::FILE), Some(Mode::FILE_EXECUTABLE)),
+            FileStatus::Modified
+        );
+        assert_eq!(
+            classify(Some(Mode::SYMLINK), Some(Mode::FILE)),
+            FileStatus::TypeChange
+        );
+        assert_eq!(classify(None, None), FileStatus::Untracked);
+    }
+
+    #[test]
+    fn reversed_swaps_sides_and_flips_hunk_kinds() {
+        let mut file = FileDiff::new(
+            BStr::new(b"f.txt"),
+            Some(oid("a")),
+            Some(Mode::FILE),
+            Some(oid("b")),
+            Some(Mode::FILE_EXECUTABLE),
+        );
+        file.old_data = b"index\ncontent\n".to_vec();
+        file.new_data = b"head\ncontent\n".to_vec();
+        file.old_ends_with_newline = true;
+        file.new_ends_with_newline = false;
+        file.hunks = vec![hunk(HunkHeader {
+            before_hunk_start: 2,
+            before_hunk_len: 3,
+            after_hunk_start: 1,
+            after_hunk_len: 2,
+        })];
+
+        let r = reversed(&file);
+        assert_eq!(r.path, "f.txt");
+        assert_eq!(r.old_id, file.new_id);
+        assert_eq!(r.new_id, file.old_id);
+        assert_eq!(r.old_mode, file.new_mode);
+        assert_eq!(r.new_mode, file.old_mode);
+        assert_eq!(r.old_data, file.new_data);
+        assert_eq!(r.new_data, file.old_data);
+        assert_eq!(r.old_ends_with_newline, file.new_ends_with_newline);
+        assert_eq!(r.new_ends_with_newline, file.old_ends_with_newline);
+
+        let h = &r.hunks[0];
+        assert_eq!(h.header.before_hunk_start, 1);
+        assert_eq!(h.header.before_hunk_len, 2);
+        assert_eq!(h.header.after_hunk_start, 2);
+        assert_eq!(h.header.after_hunk_len, 3);
+        let kinds: Vec<DiffLineKind> = h.lines.iter().map(|(k, _)| *k).collect();
+        assert_eq!(
+            kinds,
+            vec![DiffLineKind::Context, DiffLineKind::Add, DiffLineKind::Remove]
+        );
+        assert_eq!(h.lines[1].1, b"old\n");
+        assert_eq!(h.lines[2].1, b"new\n");
+    }
+}
