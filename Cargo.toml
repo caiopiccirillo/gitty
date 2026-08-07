@@ -5,8 +5,9 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
-git2 = "0.21.0"
+gix = { version = "0.86", default-features = false, features = ["status", "sha1"] }
 ratatui = "0.30.2"
 
 [dev-dependencies]
+git2 = "0.21.0"
 tempfile = "3.27.0"
