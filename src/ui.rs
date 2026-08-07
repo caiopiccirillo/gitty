@@ -207,6 +207,11 @@ fn status_bar(app: &App) -> Paragraph<'static> {
             " Enter commit · Esc cancel ",
             Style::new().fg(Color::Yellow),
         )
+    } else if let Some(prompt) = &app.discard_confirm {
+        Span::styled(
+            format!(" discard {}? y confirm · n cancel ", prompt.what),
+            Style::new().fg(Color::Yellow),
+        )
     } else if let Some(range) = app.selection_range() {
         let verb = match app.tab {
             Tab::Unstaged => "s stage",
@@ -230,13 +235,17 @@ fn status_bar(app: &App) -> Paragraph<'static> {
 
 fn hints(app: &App) -> &'static str {
     match (app.focus, app.tab) {
-        (Focus::Files, Tab::Unstaged) => " Tab · j/k · space stage · h/l fold · c commit · q quit ",
-        (Focus::Files, Tab::Staged) => " Tab · j/k · space unstage · h/l fold · c commit · q quit ",
+        (Focus::Files, Tab::Unstaged) => {
+            " Tab · j/k · space stage · d discard · h/l fold · c commit · q quit "
+        }
+        (Focus::Files, Tab::Staged) => {
+            " Tab · j/k · space unstage · d discard · h/l fold · c commit · q quit "
+        }
         (Focus::Diff, Tab::Unstaged) => {
-            " j/k line · n/p hunk · v select · s stage · c commit · q quit "
+            " j/k change · n/p hunk · v select · s stage · d discard · c commit · q quit "
         }
         (Focus::Diff, Tab::Staged) => {
-            " j/k line · n/p hunk · v select · u unstage · c commit · q quit "
+            " j/k change · n/p hunk · v select · u unstage · d discard · c commit · q quit "
         }
     }
 }
@@ -275,6 +284,7 @@ fn style_for(kind: LineKind) -> Style {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::{DiscardAction, DiscardPrompt};
     use crate::diff::{DiffLine, DiffView, FileInfo};
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::{Terminal, backend::TestBackend};
@@ -409,6 +419,23 @@ mod tests {
         assert_eq!(buffer[(25, 2)].bg, Color::DarkGray);
         // ...and the cursor end is lighter.
         assert_eq!(buffer[(25, 3)].bg, Color::Gray);
+    }
+
+    #[test]
+    fn status_bar_asks_before_a_discard() {
+        let mut app = sample_app();
+        app.discard_confirm = Some(DiscardPrompt {
+            what: "hunk 1 of a.txt".into(),
+            action: DiscardAction::Hunk {
+                file_idx: 0,
+                hunk_idx: 0,
+                staged: false,
+            },
+        });
+        let (screen, _) = render_app(&mut app, 80, 10);
+        assert!(screen.contains("discard hunk 1 of a.txt?"));
+        assert!(screen.contains("y confirm"));
+        assert!(screen.contains("n cancel"));
     }
 
     #[test]

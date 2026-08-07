@@ -293,7 +293,7 @@ mod tests {
             index,
             true,
             false,
-            &header(1, 2, 1, 2),
+            &header(0, 2, 0, 2),
             &[
                 line(DiffLineKind::Context, "a"),
                 line(DiffLineKind::Remove, "B"),
@@ -303,5 +303,60 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out, b"a\nb\nc\n");
+    }
+
+    /// Discarding a hunk restores the old side: every removal is kept and no
+    /// addition survives, so the result equals the old content.
+    #[test]
+    fn discard_restores_the_old_side() {
+        let old = b"a\nb\nc\n";
+        let selection = Selection {
+            keep_removes: &|_| true,
+            keep_adds: &|_| false,
+        };
+        let out = hunk(
+            old,
+            true,
+            true,
+            &header(0, 3, 0, 3),
+            &[
+                line(DiffLineKind::Context, "a"),
+                line(DiffLineKind::Remove, "b"),
+                line(DiffLineKind::Add, "B"),
+                line(DiffLineKind::Context, "c"),
+            ],
+            &selection,
+        )
+        .unwrap();
+        assert_eq!(out, b"a\nb\nc\n");
+    }
+
+    /// Discarding only the selected lines keeps the unselected worktree
+    /// lines and restores the selected deletions.
+    #[test]
+    fn discard_only_the_selected_lines() {
+        // index: l1 l2 l3; worktree: l1 L2 L3 (both changes present).
+        // Discard the l2 change: restore l2 (removal 0), keep L3 (addition 1).
+        let old = b"l1\nl2\nl3\n";
+        let selection = Selection {
+            keep_removes: &|i| i == 0,
+            keep_adds: &|i| i != 0,
+        };
+        let out = hunk(
+            old,
+            true,
+            true,
+            &header(0, 3, 0, 3),
+            &[
+                line(DiffLineKind::Context, "l1"),
+                line(DiffLineKind::Remove, "l2"),
+                line(DiffLineKind::Add, "L2"),
+                line(DiffLineKind::Remove, "l3"),
+                line(DiffLineKind::Add, "L3"),
+            ],
+            &selection,
+        )
+        .unwrap();
+        assert_eq!(out, b"l1\nl2\nL3\n");
     }
 }

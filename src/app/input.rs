@@ -11,6 +11,10 @@ impl App {
             self.handle_commit_key(key);
             return;
         }
+        if self.discard_confirm.is_some() {
+            self.handle_discard_key(key);
+            return;
+        }
         match (key.modifiers, key.code) {
             (_, KeyCode::Char('q')) | (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
                 self.should_quit = true;
@@ -21,6 +25,17 @@ impl App {
                 Focus::Files => self.handle_files_key(key),
                 Focus::Diff => self.handle_diff_key(key),
             },
+        }
+    }
+
+    /// Keys while the discard confirmation is open.
+    fn handle_discard_key(&mut self, key: KeyEvent) {
+        match (key.modifiers, key.code) {
+            (_, KeyCode::Char('y') | KeyCode::Char('Y')) => self.confirm_discard(),
+            (_, KeyCode::Char('n') | KeyCode::Char('N')) | (_, KeyCode::Esc) => {
+                self.discard_confirm = None;
+            }
+            _ => {}
         }
     }
 
@@ -68,6 +83,7 @@ impl App {
                 (Tab::Staged, Some(Node::Dir { .. })) => self.unstage_selected_dir(),
                 _ => {}
             },
+            KeyCode::Char('d') => self.prompt_discard(),
             _ => {}
         }
     }
@@ -189,6 +205,7 @@ impl App {
                     self.unstage_selected_hunk();
                 }
             }
+            (_, KeyCode::Char('d')) => self.prompt_discard(),
             _ => {}
         }
     }

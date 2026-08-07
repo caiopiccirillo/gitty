@@ -105,6 +105,273 @@ pub fn unstage_lines(
     )
 }
 
+/// Discard a single hunk of the unstaged diff: the worktree region reverts
+/// to the index version (like `git restore` for that hunk).
+pub fn discard_hunk(path: &Path, file_idx: usize, hunk_idx: usize) -> Result<()> {
+    let repo = open_repo(path)?;
+    let fd = &workdir_diff(&repo)?[file_idx];
+    let file = &reversed(fd);
+    let hunk = &file.hunks[hunk_idx];
+    let content = discard_content(
+        file,
+        hunk,
+        &Selection {
+            keep_removes: &|_| false,
+            keep_adds: &|_| true,
+        },
+    )?;
+    write_worktree(&repo, &fd.path, &content, fd.old_id.is_some(), fd.old_mode)
+}
+
+/// Discard only the selected changed lines of an unstaged hunk: selected
+/// additions disappear from the worktree, selected deletions are restored.
+pub fn discard_lines(
+    path: &Path,
+    file_idx: usize,
+    hunk_idx: usize,
+    selected: &SelectedLines,
+) -> Result<()> {
+    let repo = open_repo(path)?;
+    let fd = &workdir_diff(&repo)?[file_idx];
+    let file = &reversed(fd);
+    let hunk = &file.hunks[hunk_idx];
+    let content = discard_content(
+        file,
+        hunk,
+        &Selection {
+            keep_removes: &|i| !selected.additions.contains(&i),
+            keep_adds: &|i| selected.deletions.contains(&i),
+        },
+    )?;
+    write_worktree(&repo, &fd.path, &content, fd.old_id.is_some(), fd.old_mode)
+}
+
+/// Discard a whole file of the unstaged diff: the worktree file reverts to
+/// the index version, or is deleted if it was untracked.
+pub fn discard_file(path: &Path, file: &FileInfo) -> Result<()> {
+    let repo = open_repo(path)?;
+    let files = workdir_diff(&repo)?;
+    let fd = files
+        .iter()
+        .find(|f| f.path == file.path)
+        .context("file not in the unstaged diff")?;
+    let content = match fd.old_id {
+        Some(id) => blob_content(&repo, id)?,
+        None => Vec::new(),
+    };
+    write_worktree(&repo, &fd.path, &content, fd.old_id.is_some(), fd.old_mode)
+}
+
+/// Discard a single hunk of the staged diff: both the worktree and the index
+/// region revert to HEAD (like `git checkout HEAD --` for that hunk).
+pub fn discard_staged_hunk(path: &Path, file_idx: usize, hunk_idx: usize) -> Result<()> {
+    let repo = open_repo(path)?;
+    let fd = &staged_diff(&repo)?[file_idx];
+    let file = &reversed(fd);
+    let hunk = &file.hunks[hunk_idx];
+    let selection = Selection {
+        keep_removes: &|_| false,
+        keep_adds: &|_| true,
+    };
+    let content = discard_content(file, hunk, &selection)?;
+    replace_index_blob(&repo, &fd.path, &content, fd.old_id.is_none())?;
+    // Revert the same region in the worktree, preserving any other changes.
+    if let Some(raw) = worktree_content(&repo, &fd.path) {
+        let content = splice::hunk(
+            &raw,
+            raw.ends_with(b"\n"),
+            file.new_ends_with_newline,
+            &hunk.header,
+            &hunk.lines,
+            &selection,
+        )?;
+        write_worktree(&repo, &fd.path, &content, fd.old_id.is_some(), fd.old_mode)?;
+    }
+    Ok(())
+}
+
+/// Discard only the selected changed lines of a staged hunk. The reverse
+/// diff swaps the roles of `+` and `-`, so the selection is swapped too.
+pub fn discard_staged_lines(
+    path: &Path,
+    file_idx: usize,
+    hunk_idx: usize,
+    selected: &SelectedLines,
+) -> Result<()> {
+    let repo = open_repo(path)?;
+    let fd = &staged_diff(&repo)?[file_idx];
+    let file = &reversed(fd);
+    let hunk = &file.hunks[hunk_idx];
+    let swapped = SelectedLines {
+        additions: selected.deletions.clone(),
+        deletions: selected.additions.clone(),
+    };
+    let selection = Selection {
+        keep_removes: &|i| !swapped.deletions.contains(&i),
+        keep_adds: &|i| swapped.additions.contains(&i),
+    };
+    let content = discard_content(file, hunk, &selection)?;
+    replace_index_blob(&repo, &fd.path, &content, fd.old_id.is_none())?;
+    if let Some(raw) = worktree_content(&repo, &fd.path) {
+        let content = splice::hunk(
+            &raw,
+            raw.ends_with(b"\n"),
+            file.new_ends_with_newline,
+            &hunk.header,
+            &hunk.lines,
+            &selection,
+        )?;
+        write_worktree(&repo, &fd.path, &content, fd.old_id.is_some(), fd.old_mode)?;
+    }
+    Ok(())
+}
+
+/// Discard a whole file of the staged diff: the index entry reverts to HEAD
+/// (or is dropped) and the worktree file is rewritten to HEAD's version (or
+/// deleted).
+pub fn discard_staged_file(path: &Path, file: &FileInfo) -> Result<()> {
+    let repo = open_repo(path)?;
+    let files = staged_diff(&repo)?;
+    let fd = files
+        .iter()
+        .find(|f| f.path == file.path)
+        .context("file not in the staged diff")?;
+    match fd.old_id.zip(fd.old_mode) {
+        Some((id, mode)) => {
+            let content = blob_content(&repo, id)?;
+            replace_index_blob(&repo, &fd.path, &content, false)?;
+            write_worktree(&repo, &fd.path, &content, true, Some(mode))?;
+        }
+        None => {
+            // Added file: drop the entry and delete the worktree file.
+            let mut index = owned_index(&repo)?;
+            let rela = BString::from(fd.path.as_str());
+            if let Ok(idx) = index.entry_index_by_path(rela.as_bstr()) {
+                index.remove_entry_at_index(idx);
+            }
+            index.write(gix::index::write::Options::default())?;
+            write_worktree(&repo, &fd.path, &[], false, None)?;
+        }
+    }
+    Ok(())
+}
+
+/// The worktree content after discarding the hunk region of `file`, which
+/// must be the reversed diff (worktree or index as the old side, the side to
+/// revert to as the new side). The selection decides which lines survive.
+fn discard_content(file: &FileDiff, hunk: &Hunk, selection: &Selection<'_>) -> Result<Vec<u8>> {
+    splice::hunk(
+        &file.old_data,
+        file.old_ends_with_newline,
+        file.new_ends_with_newline,
+        &hunk.header,
+        &hunk.lines,
+        selection,
+    )
+    .with_context(|| format!("cannot rebuild {}", file.path))
+}
+
+/// The raw bytes of the worktree file at `rela`, or `None` if it's missing.
+fn worktree_content(repo: &gix::Repository, rela: &str) -> Option<Vec<u8>> {
+    let full = repo
+        .workdir()?
+        .join(gix::path::from_bstr(BStr::new(rela.as_bytes())));
+    std::fs::read(&full).ok()
+}
+
+/// Write `content` back to the worktree file at `rela`, restoring the file
+/// type and mode of the side it reverts to.
+///
+/// * `has_entry`: whether the side being restored to has an index entry.
+///   Without one (untracked or newly added file) the worktree file is
+///   deleted instead of written.
+/// * `mode`: the mode of the side being restored to, which decides between a
+///   regular file, an executable and a symlink.
+fn write_worktree(
+    repo: &gix::Repository,
+    rela: &str,
+    content: &[u8],
+    has_entry: bool,
+    mode: Option<Mode>,
+) -> Result<()> {
+    let workdir = repo.workdir().context("repository has no worktree")?;
+    let full = workdir.join(gix::path::from_bstr(BStr::new(rela.as_bytes())));
+    if !has_entry {
+        if full.is_symlink() || full.is_file() {
+            std::fs::remove_file(&full)?;
+        }
+        return Ok(());
+    }
+    if full.is_symlink() || full.is_file() {
+        std::fs::remove_file(&full)?;
+    }
+    match mode {
+        Some(Mode::SYMLINK) => {
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(gix::path::from_bstr(BStr::new(content)), &full)?;
+            #[cfg(not(unix))]
+            std::fs::write(&full, content)?;
+        }
+        _ => {
+            std::fs::write(&full, content)?;
+            set_executable(&full, mode == Some(Mode::FILE_EXECUTABLE));
+        }
+    }
+    Ok(())
+}
+
+/// The content of the blob with `id`.
+fn blob_content(repo: &gix::Repository, id: gix::ObjectId) -> Result<Vec<u8>> {
+    Ok(repo.find_object(id)?.into_blob().data.clone())
+}
+
+/// Set (or clear) the executable bit of `path`, keeping the rest of the
+/// permissions untouched.
+#[cfg(unix)]
+fn set_executable(path: &std::path::Path, executable: bool) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let Ok(mut permissions) = std::fs::metadata(path).map(|m| m.permissions()) else {
+        return;
+    };
+    let mut mode = permissions.mode();
+    if executable {
+        mode |= 0o111;
+    } else {
+        mode &= !0o111;
+    }
+    permissions.set_mode(mode);
+    let _ = std::fs::set_permissions(path, permissions);
+}
+
+#[cfg(not(unix))]
+fn set_executable(_path: &std::path::Path, _executable: bool) {}
+
+/// Update the index so the file at `path` holds `content`, removing the
+/// entry when `content` is empty and `remove_when_empty` is set. The entry
+/// is expected to exist (the unstage/discard paths).
+fn replace_index_blob(
+    repo: &gix::Repository,
+    path: &str,
+    content: &[u8],
+    remove_when_empty: bool,
+) -> Result<()> {
+    let blob_id = repo.write_blob(content)?.detach();
+    let mut index = owned_index(repo)?;
+    let rela = BString::from(path);
+    let idx = index
+        .entry_index_by_path(rela.as_bstr())
+        .ok()
+        .context("file not in index")?;
+    if content.is_empty() && remove_when_empty {
+        index.remove_entry_at_index(idx);
+    } else {
+        index.entries_mut()[idx].id = blob_id;
+    }
+    index.write(gix::index::write::Options::default())?;
+    Ok(())
+}
+
 /// A fresh, mutable copy of the index (creating an empty one if none exists).
 pub(super) fn owned_index(repo: &gix::Repository) -> Result<gix::index::File> {
     Ok((**repo.index_or_empty()?).clone())

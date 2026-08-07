@@ -59,6 +59,8 @@ pub struct App {
     pub scroll: usize,
     /// The commit message being typed (`c`), if the commit box is open.
     pub commit_input: Option<CommitInput>,
+    /// A destructive discard awaiting confirmation (`d` then `y`).
+    pub discard_confirm: Option<DiscardPrompt>,
     /// One-off feedback shown in the status bar (e.g. staging errors).
     pub message: Option<String>,
     viewport_height: usize,
@@ -101,6 +103,7 @@ impl App {
             visual_anchor: None,
             scroll: 0,
             commit_input: None,
+            discard_confirm: None,
             message: None,
             viewport_height: 0,
             repo_path,
@@ -338,6 +341,123 @@ impl App {
             };
     }
 
+    /// Open the discard prompt for what's under the cursor (`d`).
+    pub fn prompt_discard(&mut self) {
+        let staged = self.tab == Tab::Staged;
+        let action = match self.focus {
+            Focus::Files => match self.selected_node().cloned() {
+                Some(Node::File { file_idx, .. }) => {
+                    let file = self.current_diff().files[file_idx].clone();
+                    DiscardAction::File(file, staged)
+                }
+                Some(Node::Dir { path, .. }) => DiscardAction::Dir(path, staged),
+                None => return,
+            },
+            Focus::Diff => {
+                let Some(hunk) = self.current_hunk() else {
+                    self.message = Some("no hunk under the cursor".into());
+                    return;
+                };
+                match self.selected_lines() {
+                    Some((hunk, selected)) => DiscardAction::Lines {
+                        file_idx: hunk.file_idx,
+                        hunk_idx: hunk.hunk_idx,
+                        selected,
+                        staged,
+                    },
+                    None if self.visual_anchor.is_some() => {
+                        self.message = Some("no changed lines selected".into());
+                        return;
+                    }
+                    None => DiscardAction::Hunk {
+                        file_idx: hunk.file_idx,
+                        hunk_idx: hunk.hunk_idx,
+                        staged,
+                    },
+                }
+            }
+        };
+        let what = match &action {
+            DiscardAction::Hunk { file_idx, hunk_idx, .. } => {
+                let path = &self.current_diff().files[*file_idx].path;
+                format!("hunk {} of {path}", hunk_idx + 1)
+            }
+            DiscardAction::Lines {
+                file_idx,
+                hunk_idx,
+                selected,
+                ..
+            } => {
+                let path = &self.current_diff().files[*file_idx].path;
+                format!(
+                    "{} line(s) of hunk {} in {path}",
+                    selected.additions.len() + selected.deletions.len(),
+                    hunk_idx + 1
+                )
+            }
+            DiscardAction::File(file, _) => format!("file {}", file.path),
+            DiscardAction::Dir(path, _) => format!("directory {path}/"),
+        };
+        self.discard_confirm = Some(DiscardPrompt { what, action });
+    }
+
+    /// Run the confirmed discard action.
+    fn confirm_discard(&mut self) {
+        let Some(prompt) = self.discard_confirm.take() else {
+            return;
+        };
+        self.message = match self.execute_discard(prompt.action) {
+            Ok(()) => None,
+            Err(e) => Some(format!("discard failed: {e}")),
+        };
+    }
+
+    fn execute_discard(&mut self, action: DiscardAction) -> Result<()> {
+        let repo_path = self.repo_path.clone();
+        match action {
+            DiscardAction::Hunk {
+                file_idx,
+                hunk_idx,
+                staged,
+            } => {
+                if staged {
+                    git::discard_staged_hunk(&repo_path, file_idx, hunk_idx)?;
+                } else {
+                    git::discard_hunk(&repo_path, file_idx, hunk_idx)?;
+                }
+            }
+            DiscardAction::Lines {
+                file_idx,
+                hunk_idx,
+                selected,
+                staged,
+            } => {
+                if staged {
+                    git::discard_staged_lines(&repo_path, file_idx, hunk_idx, &selected)?;
+                } else {
+                    git::discard_lines(&repo_path, file_idx, hunk_idx, &selected)?;
+                }
+            }
+            DiscardAction::File(file, staged) => {
+                if staged {
+                    git::discard_staged_file(&repo_path, &file)?;
+                } else {
+                    git::discard_file(&repo_path, &file)?;
+                }
+            }
+            DiscardAction::Dir(path, staged) => {
+                for file in self.dir_files(&path) {
+                    if staged {
+                        git::discard_staged_file(&repo_path, &file)?;
+                    } else {
+                        git::discard_file(&repo_path, &file)?;
+                    }
+                }
+            }
+        }
+        self.refresh()
+    }
+
     fn with_hunk(&mut self, verb: &str, op: impl FnOnce(&Path, HunkId) -> Result<()>) {
         let Some(hunk) = self.current_hunk() else {
             self.message = Some("no hunk under the cursor".into());
@@ -474,6 +594,33 @@ enum NodeIdentity {
 pub struct CommitInput {
     pub text: String,
     pub cursor: usize,
+}
+
+/// A destructive discard awaiting confirmation.
+#[derive(Debug)]
+pub struct DiscardPrompt {
+    /// What the status bar should ask about, e.g. "hunk 2 of f.txt".
+    pub what: String,
+    pub action: DiscardAction,
+}
+
+/// What a confirmed discard should revert. `staged` selects the staged-tab
+/// operations, which revert both the worktree and the index to HEAD.
+#[derive(Debug)]
+pub enum DiscardAction {
+    Hunk {
+        file_idx: usize,
+        hunk_idx: usize,
+        staged: bool,
+    },
+    Lines {
+        file_idx: usize,
+        hunk_idx: usize,
+        selected: SelectedLines,
+        staged: bool,
+    },
+    File(FileInfo, bool),
+    Dir(String, bool),
 }
 
 impl CommitInput {
@@ -667,6 +814,58 @@ mod tests {
         assert_eq!(app.focus, Focus::Diff, "Esc only cancels the selection");
         press(&mut app, KeyCode::Esc);
         assert_eq!(app.focus, Focus::Files);
+    }
+
+    #[test]
+    fn discard_requires_confirmation() {
+        let mut app = test_app();
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('d'));
+        assert!(app.discard_confirm.is_some());
+
+        // n cancels without touching anything.
+        press(&mut app, KeyCode::Char('n'));
+        assert!(app.discard_confirm.is_none());
+
+        // y runs the operation (which fails here: /unused is not a repo).
+        press(&mut app, KeyCode::Char('d'));
+        assert!(app.discard_confirm.is_some());
+        press(&mut app, KeyCode::Char('y'));
+        assert!(app.discard_confirm.is_none());
+        assert!(
+            app.message
+                .as_deref()
+                .is_some_and(|m| m.starts_with("discard failed"))
+        );
+    }
+
+    #[test]
+    fn files_pane_discard_targets_the_selected_file() {
+        let mut app = test_app();
+        press(&mut app, KeyCode::Char('d'));
+        let prompt = app.discard_confirm.take().unwrap();
+        assert!(matches!(prompt.action, DiscardAction::File(ref f, false) if f.path == "a.txt"));
+        assert_eq!(prompt.what, "file a.txt");
+    }
+
+    #[test]
+    fn visual_selection_discards_selected_lines() {
+        let mut app = test_app();
+        // File 1: [@@, deletion, @@, deletion]; select the first deletion.
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('v'));
+        press(&mut app, KeyCode::Char('d'));
+        let prompt = app.discard_confirm.take().unwrap();
+        assert!(matches!(
+            prompt.action,
+            DiscardAction::Lines {
+                file_idx: 1,
+                hunk_idx: 0,
+                staged: false,
+                ..
+            }
+        ));
     }
 
     /// src/app.rs, src/git/ops.rs, top.rs — one hunk each.

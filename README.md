@@ -20,6 +20,8 @@ binary and no C toolchain at build time.
 - Stage or unstage entire files and directories.
 - Stage or unstage individual hunks, or just the lines you select with the
   visual selection mode.
+- Discard unwanted changes — hunks, lines, files or directories — with a
+  confirmation prompt before anything is reverted.
 - Commit the staged changes from an integrated message box.
 - The diff refreshes automatically when the repository changes on disk,
   computed on a background thread so the interface stays responsive.
@@ -101,6 +103,7 @@ Files pane:
 | `l` / `→`               | Expand a collapsed directory, open a file|
 | `h` / `←`               | Collapse a directory, move to its parent |
 | `Space`                 | Stage (unstaged tab) / unstage (staged tab) the selected file or directory |
+| `d`                     | Discard the selected file or directory (asks for confirmation) |
 
 Diff pane:
 
@@ -114,12 +117,18 @@ Diff pane:
 | `v`                     | Start or end a visual line selection     |
 | `s`                     | Stage the hunk (or the selected lines)   |
 | `u`                     | Unstage the hunk (or the selected lines) |
+| `d`                     | Discard the hunk (or the selected lines), with confirmation |
 | `h` / `←`               | Back to the files pane                   |
 | `Esc`                   | Cancel the selection, then back to files |
 
 The cursor moves between changed lines only (`+`/`-`), and when you open a
 file it lands on its first change. A visual selection (`v`) cannot leave its
 hunk, so it always maps to a single, well-formed patch.
+
+Discarding reverts changes you no longer want: on the unstaged tab a hunk or
+file is restored to the index version, on the staged tab to the `HEAD`
+version (removing an untracked or newly added file entirely). It is
+destructive, so gitiff always asks for confirmation (`y`/`n`) first.
 
 ## Development
 

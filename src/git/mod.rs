@@ -20,7 +20,9 @@ mod staging;
 pub use commit::commit;
 pub use diff::{load_staged_diff, load_unstaged_diff};
 pub use staging::{
-    stage_file, stage_hunk, stage_lines, unstage_file, unstage_hunk, unstage_lines,
+    discard_file, discard_hunk, discard_lines, discard_staged_file, discard_staged_hunk,
+    discard_staged_lines, stage_file, stage_hunk, stage_lines, unstage_file, unstage_hunk,
+    unstage_lines,
 };
 
 use std::path::Path;
