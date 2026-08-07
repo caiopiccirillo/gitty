@@ -67,7 +67,8 @@ pub(super) fn diff_to_view(files: &[FileDiff]) -> DiffView {
     }
 }
 
-/// The `@@ -a,b +c,d @@` line of a hunk, with the section heading like `git`.
+/// The `@@ -a,b +c,d @@` line of a hunk (positions are 1-based already),
+/// with the section heading like `git`.
 fn hunk_header_line(hunk: &Hunk) -> String {
     let h = &hunk.header;
     let section = hunk
@@ -79,18 +80,11 @@ fn hunk_header_line(hunk: &Hunk) -> String {
     match section {
         Some(section) => format!(
             "@@ -{},{} +{},{} @@ {}",
-            h.before_hunk_start + 1,
-            h.before_hunk_len,
-            h.after_hunk_start + 1,
-            h.after_hunk_len,
-            section
+            h.before_hunk_start, h.before_hunk_len, h.after_hunk_start, h.after_hunk_len, section
         ),
         None => format!(
             "@@ -{},{} +{},{} @@",
-            h.before_hunk_start + 1,
-            h.before_hunk_len,
-            h.after_hunk_start + 1,
-            h.after_hunk_len
+            h.before_hunk_start, h.before_hunk_len, h.after_hunk_start, h.after_hunk_len
         ),
     }
 }
@@ -105,10 +99,13 @@ fn section_of(line: &BStr) -> Option<String> {
         return None;
     }
     let mut section = String::from_utf8_lossy(&line[..line.len().min(80)]).into_owned();
-    if let Some(idx) = section.rfind(' ') {
-        let before = section[..idx].trim_end();
-        if !before.is_empty() {
-            section = before.to_string();
+    if line.len() > 80 {
+        // Truncate at the last space so words aren't cut mid-way.
+        if let Some(idx) = section.rfind(' ') {
+            let before = section[..idx].trim_end();
+            if !before.is_empty() {
+                section = before.to_string();
+            }
         }
     }
     Some(section)
