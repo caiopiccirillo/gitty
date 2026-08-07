@@ -55,6 +55,56 @@ fn commits_on_an_unborn_branch() {
 }
 
 #[test]
+fn commits_nested_directories_in_git_order() {
+    let (dir, repo) = init_with_identity();
+    commit_file(&repo, dir.path(), "a.txt", BASE);
+    fs::create_dir_all(dir.path().join("d/e")).unwrap();
+    commit_file(&repo, dir.path(), "d/e/b.txt", BASE);
+    commit_file(&repo, dir.path(), "d/f.txt", BASE);
+    commit_file(&repo, dir.path(), "x.txt", BASE);
+    fs::write(dir.path().join("d/e/b.txt"), BASE.replacen("l1", "L1", 1)).unwrap();
+    let file = load_unstaged_diff(dir.path()).unwrap().files[0].clone();
+    assert_eq!(file.path, "d/e/b.txt");
+    stage_file(dir.path(), &file).unwrap();
+
+    commit(dir.path(), "change b").unwrap();
+
+    let tree = repo
+        .head()
+        .unwrap()
+        .peel_to_commit()
+        .unwrap()
+        .tree()
+        .unwrap();
+    let names: Vec<String> = tree.iter().map(|e| e.name().unwrap().to_string()).collect();
+    assert_eq!(names, ["a.txt", "d", "x.txt"], "entries are sorted like git");
+    let d = tree
+        .get_name("d")
+        .unwrap()
+        .to_object(&repo)
+        .unwrap()
+        .peel_to_tree()
+        .unwrap();
+    let names: Vec<String> = d.iter().map(|e| e.name().unwrap().to_string()).collect();
+    assert_eq!(names, ["e", "f.txt"]);
+    let b = d
+        .get_name("e")
+        .unwrap()
+        .to_object(&repo)
+        .unwrap()
+        .into_tree()
+        .unwrap()
+        .get_name("b.txt")
+        .unwrap()
+        .to_object(&repo)
+        .unwrap()
+        .into_blob()
+        .unwrap();
+    assert_eq!(b.content(), BASE.replacen("l1", "L1", 1).as_bytes());
+    assert!(load_unstaged_diff(dir.path()).unwrap().files.is_empty());
+}
+
+#[test]
 fn app_commit_flow() {
     let (dir, repo) = init_with_identity();
     commit_file(&repo, dir.path(), "f.txt", BASE);
