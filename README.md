@@ -70,11 +70,13 @@ Two layouts are available, toggled with `m`:
   right, sharing one file tree that merges both sides (`MM` means the file
   has both staged and unstaged changes). Panes with nothing to show are
   hidden, so the split collapses to `Files | Unstaged` while you stage and
-  back to `Files | Staged` once everything is staged. `Tab` moves the focus
-  between the visible panes (skipping hidden ones); each pane keeps its own
-  cursor. In the files pane, `Space` acts like lazygit: stage the selected
-  file or directory, and press it again to unstage. The `s`/`u`/`d` diff
-  keys act on the focused pane.
+  back to `Files | Staged` once everything is staged. `Tab` cycles the
+  focus through the visible panes (files first, then left to right),
+  skipping hidden ones — so after staging, `Tab` lands in the staged pane
+  where `u` unstages. Each pane keeps its own cursor. In the files pane,
+  `Space` acts like lazygit: stage the selected file or directory, and
+  press it again to unstage. The `s`/`u`/`d` diff keys act on the focused
+  pane.
 
 ### Basic workflow
 
@@ -97,7 +99,7 @@ Global:
 | Key            | Action                              |
 | -------------- | ----------------------------------- |
 | `q`, `Ctrl+C`  | Quit                                |
-| `Tab`          | Switch the focused side (and the shown pane in the classic layout) |
+| `Tab`          | Classic: switch the shown side. Split: cycle the focus through the visible panes |
 | `c`            | Open the commit message box         |
 | `m`            | Toggle between the classic and split layouts |
 

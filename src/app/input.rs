@@ -258,17 +258,37 @@ impl App {
                 pane.visual_anchor = None;
                 self.snap_to_first_change();
             }
-            // The split layout keeps both panes visible; Tab only moves the
-            // focus between them, skipping a side without content (its pane
-            // is hidden).
+            // The split layout cycles the focus through the visible panes
+            // (files, then the diff panes left to right), skipping sides
+            // whose pane is hidden. This way, Tab after staging lands in
+            // the staged pane where `u` unstages.
             Mode::Split => {
-                let target = self.tab.other();
-                let target_has_files = match target {
-                    Tab::Unstaged => !self.unstaged.files.is_empty(),
-                    Tab::Staged => !self.staged.files.is_empty(),
-                };
-                if target_has_files {
-                    self.tab = target;
+                let visible: Vec<Tab> = [Tab::Unstaged, Tab::Staged]
+                    .into_iter()
+                    .filter(|&side| !self.diff_of(side).files.is_empty())
+                    .collect();
+                match self.focus {
+                    Focus::Files => {
+                        if let Some(&side) = visible.first() {
+                            self.tab = side;
+                            self.focus = Focus::Diff;
+                        }
+                    }
+                    Focus::Diff => match visible.iter().position(|&side| side == self.tab) {
+                        // The focused side is hidden: move to the first
+                        // visible pane instead of dropping back to files.
+                        None => {
+                            if let Some(&side) = visible.first() {
+                                self.tab = side;
+                            } else {
+                                self.focus = Focus::Files;
+                            }
+                        }
+                        Some(i) if i + 1 < visible.len() => {
+                            self.tab = visible[i + 1];
+                        }
+                        Some(_) => self.focus = Focus::Files,
+                    },
                 }
             }
         }

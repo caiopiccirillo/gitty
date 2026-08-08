@@ -1113,7 +1113,7 @@ mod tests {
         let unstaged_cursor = app.cursor();
         assert!(unstaged_cursor > 0);
 
-        // Tab only moves the focus: selection and cursors are preserved.
+        // Tab moves the diff focus to the next visible pane.
         press(&mut app, KeyCode::Tab);
         assert_eq!(app.tab, Tab::Staged);
         assert_eq!(app.selected_row, 0, "selection preserved");
@@ -1122,8 +1122,15 @@ mod tests {
         // The staged pane has its own cursor (a.txt is not staged: empty).
         assert_eq!(app.cursor(), 0);
 
+        // Tab past the last pane returns to the files pane; the unstaged
+        // cursor is untouched.
         press(&mut app, KeyCode::Tab);
-        assert_eq!(app.cursor(), unstaged_cursor, "unstaged cursor preserved");
+        assert_eq!(app.focus, Focus::Files);
+        assert_eq!(
+            app.pane_of(Tab::Unstaged).cursor,
+            unstaged_cursor,
+            "unstaged cursor preserved"
+        );
     }
 
     #[test]
@@ -1131,9 +1138,16 @@ mod tests {
         let mut app = split_app();
         press(&mut app, KeyCode::Char('j'));
         assert_eq!(app.selected_row, 1);
+        // From the files pane, Tab enters the first visible diff pane.
         press(&mut app, KeyCode::Tab);
         assert_eq!(app.selected_row, 1, "selection kept when moving focus");
-        assert_eq!(app.focus, Focus::Files, "files focus untouched");
+        assert_eq!(app.tab, Tab::Unstaged);
+        assert_eq!(app.focus, Focus::Diff);
+        // And keeps cycling through the visible panes.
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.tab, Tab::Staged);
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.focus, Focus::Files);
     }
 
     #[test]
