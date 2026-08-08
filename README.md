@@ -66,10 +66,15 @@ Two layouts are available, toggled with `m`:
 
 - **Classic** — one diff pane at a time; `Tab` switches between the staged
   and unstaged views.
-- **Split** — the staged and unstaged panes side by side, with a shared
-  file tree that merges both sides (`MM` means the file has both staged and
-  unstaged changes). `Tab` moves the focus between the panes; each pane
-  keeps its own cursor, and the `s`/`u`/`d` keys act on the focused one.
+- **Split** — the unstaged pane in the middle with the staged pane to its
+  right, sharing one file tree that merges both sides (`MM` means the file
+  has both staged and unstaged changes). Panes with nothing to show are
+  hidden, so the split collapses to `Files | Unstaged` while you stage and
+  back to `Files | Staged` once everything is staged. `Tab` moves the focus
+  between the visible panes (skipping hidden ones); each pane keeps its own
+  cursor. In the files pane, `Space` acts like lazygit: stage the selected
+  file or directory, and press it again to unstage. The `s`/`u`/`d` diff
+  keys act on the focused pane.
 
 ### Basic workflow
 
@@ -115,7 +120,7 @@ Files pane:
 | `Enter` on a file       | Open the file's diff                     |
 | `l` / `→`               | Expand a collapsed directory, open a file|
 | `h` / `←`               | Collapse a directory, move to its parent |
-| `Space`                 | Stage (unstaged tab) / unstage (staged tab) the selected file or directory |
+| `Space`                 | Classic: stage/unstage the selected file or directory. Split: toggle it — stage if it has unstaged changes, otherwise unstage |
 | `d`                     | Discard the selected file or directory (asks for confirmation) |
 
 Diff pane:

@@ -349,18 +349,28 @@ impl App {
 
     /// Stage the whole selected file (files pane, unstaged tab).
     pub fn stage_selected_file(&mut self) {
-        self.with_file("stage", git::stage_file);
+        self.stage_file_in(self.tab);
+    }
+
+    /// Stage the whole selected file as seen on `side`.
+    pub fn stage_file_in(&mut self, side: Tab) {
+        self.with_file_in(side, "stage", git::stage_file);
     }
 
     /// Unstage the whole selected file (files pane, staged tab).
     pub fn unstage_selected_file(&mut self) {
-        self.with_file("unstage", git::unstage_file);
+        self.unstage_file_in(self.tab);
     }
 
-    fn with_file(&mut self, verb: &str, op: impl FnOnce(&Path, &FileInfo) -> Result<()>) {
+    /// Unstage the whole selected file as seen on `side`.
+    pub fn unstage_file_in(&mut self, side: Tab) {
+        self.with_file_in(side, "unstage", git::unstage_file);
+    }
+
+    fn with_file_in(&mut self, side: Tab, verb: &str, op: impl FnOnce(&Path, &FileInfo) -> Result<()>) {
         let Some(file) = self
-            .selected_file_index_in(self.tab)
-            .and_then(|i| self.current_diff().files.get(i))
+            .selected_file_index_in(side)
+            .and_then(|i| self.diff_of(side).files.get(i))
             .cloned()
         else {
             return;
@@ -373,20 +383,36 @@ impl App {
 
     /// Stage all files beneath the selected directory (files pane, unstaged tab).
     pub fn stage_selected_dir(&mut self) {
+        self.stage_dir_in(self.tab);
+    }
+
+    /// Stage all files beneath the selected directory as seen on `side`.
+    pub fn stage_dir_in(&mut self, side: Tab) {
         if let Some(Node::Dir { path, .. }) = self.selected_node().cloned() {
-            self.with_dir("stage", &path, git::stage_file);
+            self.with_dir_in(side, "stage", &path, git::stage_file);
         }
     }
 
     /// Unstage all files beneath the selected directory (files pane, staged tab).
     pub fn unstage_selected_dir(&mut self) {
+        self.unstage_dir_in(self.tab);
+    }
+
+    /// Unstage all files beneath the selected directory as seen on `side`.
+    pub fn unstage_dir_in(&mut self, side: Tab) {
         if let Some(Node::Dir { path, .. }) = self.selected_node().cloned() {
-            self.with_dir("unstage", &path, git::unstage_file);
+            self.with_dir_in(side, "unstage", &path, git::unstage_file);
         }
     }
 
-    fn with_dir(&mut self, verb: &str, dir: &str, op: impl Fn(&Path, &FileInfo) -> Result<()>) {
-        let files = self.dir_files(self.tab, dir);
+    fn with_dir_in(
+        &mut self,
+        side: Tab,
+        verb: &str,
+        dir: &str,
+        op: impl Fn(&Path, &FileInfo) -> Result<()>,
+    ) {
+        let files = self.dir_files(side, dir);
         self.message = match files
             .iter()
             .try_for_each(|f| op(&self.repo_path, f))
@@ -1108,6 +1134,39 @@ mod tests {
         press(&mut app, KeyCode::Tab);
         assert_eq!(app.selected_row, 1, "selection kept when moving focus");
         assert_eq!(app.focus, Focus::Files, "files focus untouched");
+    }
+
+    #[test]
+    fn tab_in_split_mode_skips_sides_without_content() {
+        let mut app = test_app(); // staged side is empty
+        press(&mut app, KeyCode::Char('m'));
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.tab, Tab::Unstaged, "cannot focus the hidden staged pane");
+        press(&mut app, KeyCode::Char('m'));
+        assert_eq!(app.mode, Mode::Classic);
+    }
+
+    #[test]
+    fn split_mode_space_dispatch_stages_or_unstages() {
+        let mut app = split_app();
+        // x.txt is staged-only: space dispatches an unstage.
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char(' '));
+        assert!(
+            app.message
+                .as_deref()
+                .is_some_and(|m| m.starts_with("unstage failed"))
+        );
+
+        // a.txt is unstaged-only: space dispatches a stage.
+        press(&mut app, KeyCode::Char('g'));
+        press(&mut app, KeyCode::Char(' '));
+        assert!(
+            app.message
+                .as_deref()
+                .is_some_and(|m| m.starts_with("stage failed"))
+        );
     }
 
     /// src/app.rs, src/git/ops.rs, top.rs — one hunk each.

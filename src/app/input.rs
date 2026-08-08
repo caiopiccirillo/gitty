@@ -77,12 +77,33 @@ impl App {
             KeyCode::Enter => self.files_activate(),
             KeyCode::Right | KeyCode::Char('l') => self.files_right(),
             KeyCode::Left | KeyCode::Char('h') => self.files_left(),
-            KeyCode::Char(' ') => match (self.tab, self.selected_node().cloned()) {
-                (Tab::Unstaged, Some(Node::File { .. })) => self.stage_selected_file(),
-                (Tab::Unstaged, Some(Node::Dir { .. })) => self.stage_selected_dir(),
-                (Tab::Staged, Some(Node::File { .. })) => self.unstage_selected_file(),
-                (Tab::Staged, Some(Node::Dir { .. })) => self.unstage_selected_dir(),
-                _ => {}
+            KeyCode::Char(' ') => match self.mode {
+                Mode::Classic => match (self.tab, self.selected_node().cloned()) {
+                    (Tab::Unstaged, Some(Node::File { .. })) => self.stage_selected_file(),
+                    (Tab::Unstaged, Some(Node::Dir { .. })) => self.stage_selected_dir(),
+                    (Tab::Staged, Some(Node::File { .. })) => self.unstage_selected_file(),
+                    (Tab::Staged, Some(Node::Dir { .. })) => self.unstage_selected_dir(),
+                    _ => {}
+                },
+                // Lazygit-style toggle: stage the unstaged part of the
+                // selection, otherwise unstage it.
+                Mode::Split => match self.selected_node().cloned() {
+                    Some(Node::File { .. }) => {
+                        if self.selected_file_index_in(Tab::Unstaged).is_some() {
+                            self.stage_file_in(Tab::Unstaged);
+                        } else if self.selected_file_index_in(Tab::Staged).is_some() {
+                            self.unstage_file_in(Tab::Staged);
+                        }
+                    }
+                    Some(Node::Dir { path, .. }) => {
+                        if !self.dir_file_indices(Tab::Unstaged, &path).is_empty() {
+                            self.stage_dir_in(Tab::Unstaged);
+                        } else if !self.dir_file_indices(Tab::Staged, &path).is_empty() {
+                            self.unstage_dir_in(Tab::Staged);
+                        }
+                    }
+                    None => {}
+                },
             },
             KeyCode::Char('d') => self.prompt_discard(),
             _ => {}
@@ -238,9 +259,17 @@ impl App {
                 self.snap_to_first_change();
             }
             // The split layout keeps both panes visible; Tab only moves the
-            // focus between them, preserving the selection and the cursors.
+            // focus between them, skipping a side without content (its pane
+            // is hidden).
             Mode::Split => {
-                self.tab = self.tab.other();
+                let target = self.tab.other();
+                let target_has_files = match target {
+                    Tab::Unstaged => !self.unstaged.files.is_empty(),
+                    Tab::Staged => !self.staged.files.is_empty(),
+                };
+                if target_has_files {
+                    self.tab = target;
+                }
             }
         }
     }

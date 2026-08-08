@@ -26,22 +26,51 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             render_diff(frame, app, diff_area, app.tab);
         }
         Mode::Split => {
-            let [files_area, staged_area, unstaged_area] = Layout::horizontal([
-                Constraint::Percentage(25),
-                Constraint::Percentage(37),
-                Constraint::Percentage(38),
-            ])
-            .areas(main_area);
-            app.set_viewport_height(staged_area.height.saturating_sub(2) as usize);
-            render_files(frame, app, files_area);
-            render_diff(frame, app, staged_area, Tab::Staged);
-            render_diff(frame, app, unstaged_area, Tab::Unstaged);
+            let has_unstaged = !app.unstaged.files.is_empty();
+            let has_staged = !app.staged.files.is_empty();
+            match (has_unstaged, has_staged) {
+                // The unstaged pane sits between the files and the staged
+                // pane, mirroring the stage workflow left to right.
+                (true, true) => {
+                    let [files_area, unstaged_area, staged_area] = Layout::horizontal([
+                        Constraint::Percentage(25),
+                        Constraint::Percentage(37),
+                        Constraint::Percentage(38),
+                    ])
+                    .areas(main_area);
+                    app.set_viewport_height(unstaged_area.height.saturating_sub(2) as usize);
+                    render_files(frame, app, files_area);
+                    render_diff(frame, app, unstaged_area, Tab::Unstaged);
+                    render_diff(frame, app, staged_area, Tab::Staged);
+                }
+                // Panes without content are hidden entirely.
+                (true, false) => {
+                    render_split_side(frame, app, main_area, Tab::Unstaged);
+                }
+                (false, true) => {
+                    render_split_side(frame, app, main_area, Tab::Staged);
+                }
+                (false, false) => {
+                    app.set_viewport_height(0);
+                    render_files(frame, app, main_area);
+                }
+            }
         }
     }
     frame.render_widget(status_bar(app), status_area);
     if let Some(ref input) = app.commit_input {
         render_commit_box(frame, input);
     }
+}
+
+/// The files pane plus one diff pane, filling the whole width.
+fn render_split_side(frame: &mut Frame, app: &mut App, main_area: Rect, side: Tab) {
+    let [files_area, diff_area] =
+        Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)])
+            .areas(main_area);
+    app.set_viewport_height(diff_area.height.saturating_sub(2) as usize);
+    render_files(frame, app, files_area);
+    render_diff(frame, app, diff_area, side);
 }
 
 /// The centered commit-message box, with the terminal cursor inside it.
@@ -515,6 +544,15 @@ mod tests {
         assert!(screen.contains("Files (2)"));
         assert!(screen.contains("Staged (2)"));
         assert!(screen.contains("Unstaged (2)"));
+        // The unstaged pane sits between the files and the staged pane.
+        // Column of a label in the flattened screen (border glyphs are
+        // multi-byte, so positions must be counted in characters).
+        let col_of = |needle: &str| {
+            let byte = screen.find(needle).unwrap();
+            screen[..byte].chars().count() % 120
+        };
+        assert!(col_of("Files (2)") < col_of("Unstaged ("));
+        assert!(col_of("Unstaged (") < col_of("Staged (2)"));
         // Both panes show the selected file's diff (a.txt, one addition).
         assert!(screen.contains("+alpha"));
         // Merged rows carry the two-letter badge (staged M + unstaged M).
@@ -522,13 +560,65 @@ mod tests {
     }
 
     #[test]
-    fn split_layout_shows_empty_panes_for_side_less_files() {
+    fn split_layout_hides_panes_without_content() {
+        // Only unstaged changes: the staged pane is hidden.
         let mut app = App::new(sample_view(), DiffView::default(), PathBuf::from("/unused"));
         app.toggle_mode();
         app.set_viewport_height(8);
         let (screen, _) = render_app(&mut app, 120, 10);
-        // a.txt has no staged changes: the staged pane is empty for it.
+        assert!(screen.contains("Unstaged (2)"));
+        assert!(!screen.contains("Staged ("), "staged pane hidden when empty");
+
+        // Only staged changes: the unstaged pane is hidden.
+        let mut app = App::new(DiffView::default(), sample_view(), PathBuf::from("/unused"));
+        app.toggle_mode();
+        let (screen, _) = render_app(&mut app, 120, 10);
+        assert!(screen.contains("Staged (2)"));
+        assert!(!screen.contains("Unstaged ("), "unstaged pane hidden when empty");
+
+        // Neither side has changes: only the files pane remains.
+        let mut app = App::new(DiffView::default(), DiffView::default(), PathBuf::from("/unused"));
+        app.toggle_mode();
+        let (screen, _) = render_app(&mut app, 120, 10);
         assert!(screen.contains("no changes"));
+        assert!(!screen.contains("Staged ("));
+        assert!(!screen.contains("Unstaged ("));
+    }
+
+    /// A staged view with one added file, distinct from the sample files.
+    fn staged_x_view() -> DiffView {
+        let line =
+            |kind: LineKind, file_idx: usize, hunk_idx: Option<usize>, content: &str| DiffLine {
+                kind,
+                content: content.into(),
+                file_idx,
+                hunk_idx,
+            };
+        DiffView {
+            lines: vec![
+                line(LineKind::FileHeader, 0, None, "diff --git a/x.txt b/x.txt"),
+                line(LineKind::HunkHeader, 0, Some(0), "@@ -1 +1 @@"),
+                line(LineKind::Addition, 0, Some(0), "extra"),
+            ],
+            files: vec![FileInfo {
+                path: "x.txt".into(),
+                status: FileStatus::Added,
+            }],
+        }
+    }
+
+    #[test]
+    fn split_layout_shows_no_changes_for_side_less_files() {
+        let mut app = App::new(sample_view(), staged_x_view(), PathBuf::from("/unused"));
+        app.toggle_mode();
+        app.set_viewport_height(8);
+        let (screen, _) = render_app(&mut app, 120, 10);
+        // Both panes are visible, but the selected file (a.txt) has no
+        // staged changes: the staged pane shows an empty state.
+        assert!(screen.contains("Staged (1)"));
+        assert!(screen.contains("Unstaged (2)"));
+        assert!(screen.contains("no changes"));
+        assert!(screen.contains("+alpha"));
     }
 
     #[test]

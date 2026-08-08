@@ -67,6 +67,11 @@ fn split_mode_keeps_the_selection_when_switching_panes() {
     let mut app = App::load(dir.path()).unwrap();
     press(&mut app, KeyCode::Char('m'));
 
+    // Stage f.txt so the staged pane has content.
+    press(&mut app, KeyCode::Char(' '));
+    assert_eq!(app.message, None);
+    assert_eq!(app.staged.hunks().len(), 1);
+
     // Select g.txt (second row), open its diff in the unstaged pane.
     press(&mut app, KeyCode::Char('j'));
     press(&mut app, KeyCode::Enter);
@@ -81,4 +86,31 @@ fn split_mode_keeps_the_selection_when_switching_panes() {
     press(&mut app, KeyCode::Tab);
     assert_eq!(app.selected_row, 1);
     assert_eq!(app.cursor(), unstaged_cursor, "cursor restored");
+}
+
+#[test]
+fn split_mode_space_toggles_a_file_between_the_sides() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(dir.path()).unwrap();
+    commit_file(&repo, dir.path(), "f.txt", BASE);
+    fs::write(dir.path().join("f.txt"), BASE.replacen("l1", "L1", 1)).unwrap();
+
+    let mut app = App::load(dir.path()).unwrap();
+    press(&mut app, KeyCode::Char('m'));
+    assert_eq!(app.mode, Mode::Split);
+
+    // Space stages the unstaged file...
+    press(&mut app, KeyCode::Char(' '));
+    assert_eq!(app.message, None);
+    assert_eq!(app.staged.hunks().len(), 1);
+    assert!(app.unstaged.files.is_empty(), "file left the unstaged side");
+
+    // ...and a second space unstages it again (the file is now staged-only).
+    press(&mut app, KeyCode::Char(' '));
+    assert_eq!(app.message, None);
+    assert!(app.staged.files.is_empty());
+    assert_eq!(app.unstaged.hunks().len(), 1);
+
+    assert_eq!(load_staged_diff(dir.path()).unwrap().files.len(), 0);
+    assert_eq!(load_unstaged_diff(dir.path()).unwrap().files.len(), 1);
 }
