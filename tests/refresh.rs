@@ -52,14 +52,14 @@ fn refresh_preserves_selection_and_cursor_by_path() {
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Char('j'));
     press(&mut app, KeyCode::Char('j'));
-    assert_eq!(app.cursor, 2);
+    assert_eq!(app.cursor(), 2);
 
     // f.txt changes again on disk; g.txt is untouched.
     fs::write(dir.path().join("f.txt"), BASE.replacen("l2", "L2", 1)).unwrap();
     app.auto_refresh();
 
     assert_eq!(selected_path(&app), "g.txt", "selection follows the path");
-    assert_eq!(app.cursor, 2, "cursor preserved");
+    assert_eq!(app.cursor(), 2, "cursor preserved");
 }
 
 #[test]
@@ -98,11 +98,11 @@ fn auto_refresh_skips_during_visual_selection() {
     let mut app = App::load(dir.path()).unwrap();
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Char('v'));
-    assert!(app.visual_anchor.is_some());
+    assert!(app.visual_anchor().is_some());
 
     fs::write(dir.path().join("g.txt"), "new\n").unwrap();
     app.auto_refresh();
-    assert!(app.visual_anchor.is_some(), "selection untouched");
+    assert!(app.visual_anchor().is_some(), "selection untouched");
     assert_eq!(app.unstaged.files.len(), 1, "no refresh mid-selection");
 }
 
@@ -139,9 +139,9 @@ fn refresh_is_a_noop_when_nothing_changed() {
     let mut app = App::load(dir.path()).unwrap();
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Char('j'));
-    let cursor = app.cursor;
+    let cursor = app.cursor();
     // A no-change refresh must not disturb anything (fast path).
     app.auto_refresh();
-    assert_eq!(app.cursor, cursor);
+    assert_eq!(app.cursor(), cursor);
     assert_eq!(selected_path(&app), "f.txt");
 }

@@ -276,7 +276,7 @@ fn app_stages_the_visually_selected_lines() {
     assert_eq!(app.message, None);
     assert_eq!(additions(&app.staged), vec!["L2"]);
     assert_eq!(additions(&app.unstaged), vec!["L4"]);
-    assert_eq!(app.visual_anchor, None, "selection cleared after staging");
+    assert_eq!(app.visual_anchor(), None, "selection cleared after staging");
 }
 
 #[test]
