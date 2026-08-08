@@ -5,8 +5,8 @@ use anyhow::Result;
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
 
-use gitiff::app::App;
-use gitiff::ui;
+use gitty::app::App;
+use gitty::ui;
 
 /// Idle-tick interval: how often the loop wakes to apply finished
 /// background refreshes. Key events wake it immediately; the actual diff

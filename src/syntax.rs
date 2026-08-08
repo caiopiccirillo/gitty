@@ -123,7 +123,7 @@ mod tests {
     #[test]
     fn json_keys_and_strings_are_highlighted() {
         let language = language_of("data.json").unwrap();
-        let tokens = highlight(language, r#"{"name": "gitiff"}"#);
+        let tokens = highlight(language, r#"{"name": "gitty"}"#);
         assert!(tokens.iter().any(|(_, _, c)| *c == Color::Yellow), "string values");
     }
 }

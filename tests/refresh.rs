@@ -7,8 +7,8 @@ use common::{BASE, commit_file};
 use git2::Repository;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use gitiff::app::App;
-use gitiff::tree::Node;
+use gitty::app::App;
+use gitty::tree::Node;
 
 fn press(app: &mut App, code: KeyCode) {
     app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));

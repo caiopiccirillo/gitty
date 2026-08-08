@@ -636,7 +636,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gitiff"
+name = "gitty"
 version = "0.2.0"
 dependencies = [
  "anyhow",

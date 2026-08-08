@@ -1,14 +1,14 @@
-# gitiff
+# gitty
 
 A terminal user interface for reviewing and staging git changes.
 
-gitiff shows your unstaged and staged diffs side by side in a two-pane
+gitty shows your unstaged and staged diffs side by side in a two-pane
 layout, and lets you stage or unstage whole files, individual hunks, or
 single lines without leaving the terminal. It is written in Rust on top of
 [gitoxide](https://github.com/gitoxideLabs/gitoxide), so it needs no `git`
 binary and no C toolchain at build time.
 
-![gitiff screenshot](docs/screenshot.png)
+![gitty screenshot](docs/screenshot.png)
 
 <!-- Add a screenshot at docs/screenshot.png and it will appear above. -->
 
@@ -38,12 +38,12 @@ binary and no C toolchain at build time.
 Requires a recent stable Rust toolchain (edition 2024).
 
 ```sh
-git clone <your repository URL> gitiff
-cd gitiff
+git clone <your repository URL> gitty
+cd gitty
 cargo install --path .
 ```
 
-This installs the `gitiff` binary to `~/.cargo/bin`. To try it without
+This installs the `gitty` binary to `~/.cargo/bin`. To try it without
 installing:
 
 ```sh
@@ -52,13 +52,13 @@ cargo run --release
 
 ## Usage
 
-Run gitiff from inside a repository, or pass a path to a repository or any
+Run gitty from inside a repository, or pass a path to a repository or any
 directory inside one:
 
 ```sh
-gitiff
-gitiff ~/projects/my-repo
-gitiff ~/projects/my-repo/src
+gitty
+gitty ~/projects/my-repo
+gitty ~/projects/my-repo/src
 ```
 
 The left pane lists the changed files (directories first, collapsible). The
@@ -84,7 +84,7 @@ Two layouts are available, toggled with `m`:
 
 ### Basic workflow
 
-1. Start gitiff in your repository.
+1. Start gitty in your repository.
 2. Use `j`/`k` to pick a file in the left pane and press `Enter` to open its
    diff.
 3. Move the cursor to a hunk and press `s` to stage it, or press `v` to
@@ -93,7 +93,7 @@ Two layouts are available, toggled with `m`:
    file if you change your mind.
 5. Press `c` to write a commit message, then `Enter` to commit.
 
-The working tree is never modified by gitiff: staging only touches the
+The working tree is never modified by gitty: staging only touches the
 index, so your files on disk stay exactly as they are.
 
 ### Key bindings
@@ -160,7 +160,7 @@ hunk, so it always maps to a single, well-formed patch.
 Discarding reverts changes you no longer want: on the unstaged side a hunk or
 file is restored to the index version, on the staged side to the `HEAD`
 version (removing an untracked or newly added file entirely). It is
-destructive, so gitiff always asks for confirmation (`y`/`n`) first.
+destructive, so gitty always asks for confirmation (`y`/`n`) first.
 
 ## Development
 

@@ -7,9 +7,9 @@ use common::{BASE, commit_file};
 use git2::Repository;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use gitiff::app::App;
-use gitiff::diff::{LineKind, SelectedLines};
-use gitiff::git::{
+use gitty::app::App;
+use gitty::diff::{LineKind, SelectedLines};
+use gitty::git::{
     discard_file, discard_hunk, discard_lines, discard_staged_file, discard_staged_hunk,
     load_staged_diff, load_unstaged_diff, stage_file, stage_hunk,
 };
@@ -41,7 +41,7 @@ fn selected(adds: &[usize], dels: &[usize]) -> SelectedLines {
     }
 }
 
-fn additions(view: &gitiff::diff::DiffView) -> Vec<&str> {
+fn additions(view: &gitty::diff::DiffView) -> Vec<&str> {
     view.lines
         .iter()
         .filter(|l| l.kind == LineKind::Addition)
@@ -90,7 +90,7 @@ fn discard_restores_a_deleted_file() {
     fs::remove_file(dir.path().join("f.txt")).unwrap();
 
     let view = load_unstaged_diff(dir.path()).unwrap();
-    assert_eq!(view.files[0].status, gitiff::diff::FileStatus::Deleted);
+    assert_eq!(view.files[0].status, gitty::diff::FileStatus::Deleted);
     discard_file(dir.path(), &view.files[0]).unwrap();
 
     assert_eq!(fs::read_to_string(dir.path().join("f.txt")).unwrap(), BASE);
@@ -167,7 +167,7 @@ fn discards_a_staged_added_file() {
     index.write().unwrap();
 
     let staged = load_staged_diff(dir.path()).unwrap();
-    assert_eq!(staged.files[0].status, gitiff::diff::FileStatus::Added);
+    assert_eq!(staged.files[0].status, gitty::diff::FileStatus::Added);
     discard_staged_file(dir.path(), &staged.files[0]).unwrap();
 
     assert!(load_staged_diff(dir.path()).unwrap().files.is_empty());

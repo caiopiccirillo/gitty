@@ -6,8 +6,8 @@ use common::{BASE, commit_file};
 use git2::Repository;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use gitiff::app::{App, Focus, Mode, Side};
-use gitiff::git::{load_staged_diff, load_unstaged_diff};
+use gitty::app::{App, Focus, Mode, Side};
+use gitty::git::{load_staged_diff, load_unstaged_diff};
 
 /// Repo with f.txt and g.txt, both modified (one hunk each).
 fn repo_with_two_files() -> tempfile::TempDir {

@@ -6,8 +6,8 @@ use std::path::Path;
 use common::{BASE, commit_file};
 use git2::Repository;
 
-use gitiff::diff::{FileStatus, LineKind};
-use gitiff::git::{load_staged_diff, load_unstaged_diff};
+use gitty::diff::{FileStatus, LineKind};
+use gitty::git::{load_staged_diff, load_unstaged_diff};
 
 /// Add `name` to the index. No commit needed: `diff_index_to_workdir`
 /// compares the workdir against the index, `diff_tree_to_index` against the

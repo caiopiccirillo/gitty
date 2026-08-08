@@ -32,7 +32,7 @@ pub fn load_staged_diff(path: &Path) -> Result<DiffView> {
     Ok(diff_to_view(&staged_diff(&repo)?))
 }
 
-/// The workdir-vs-index diff with the options gitiff always uses (untracked
+/// The workdir-vs-index diff with the options gitty always uses (untracked
 /// files included, with their content), shared so file/hunk indices stay
 /// stable across calls.
 pub(super) fn workdir_diff(repo: &gix::Repository) -> Result<Vec<FileDiff>> {

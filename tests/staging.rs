@@ -7,13 +7,13 @@ use common::{BASE, commit_file};
 use git2::Repository;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use gitiff::app::{App, Focus};
-use gitiff::diff::{FileStatus, LineKind, SelectedLines};
-use gitiff::git::{
+use gitty::app::{App, Focus};
+use gitty::diff::{FileStatus, LineKind, SelectedLines};
+use gitty::git::{
     load_staged_diff, load_unstaged_diff, stage_file, stage_hunk, stage_lines, unstage_file,
     unstage_hunk, unstage_lines,
 };
-use gitiff::tree::Node;
+use gitty::tree::Node;
 
 /// Repo with `f.txt` committed, then changed at lines 1 and 10 (two hunks).
 fn repo_with_two_hunks() -> (tempfile::TempDir, String) {
@@ -25,7 +25,7 @@ fn repo_with_two_hunks() -> (tempfile::TempDir, String) {
     (dir, changed)
 }
 
-fn additions(view: &gitiff::diff::DiffView) -> Vec<&str> {
+fn additions(view: &gitty::diff::DiffView) -> Vec<&str> {
     view.lines
         .iter()
         .filter(|l| l.kind == LineKind::Addition)

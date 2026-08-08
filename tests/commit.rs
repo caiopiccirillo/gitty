@@ -7,8 +7,8 @@ use common::{BASE, commit_file};
 use git2::Repository;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use gitiff::app::App;
-use gitiff::git::{commit, load_staged_diff, load_unstaged_diff, stage_file};
+use gitty::app::App;
+use gitty::git::{commit, load_staged_diff, load_unstaged_diff, stage_file};
 
 fn init_with_identity() -> (tempfile::TempDir, Repository) {
     let dir = tempfile::tempdir().unwrap();
