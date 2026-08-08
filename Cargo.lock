@@ -636,7 +636,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gitty"
+name = "gitty-tui"
 version = "0.3.0"
 dependencies = [
  "anyhow",

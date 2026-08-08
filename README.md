@@ -65,13 +65,20 @@ anything beyond staging, use lazygit or gitui.
 Requires a recent stable Rust toolchain (edition 2024).
 
 ```sh
+cargo install gitty-tui
+```
+
+This installs the `gitty` binary to `~/.cargo/bin` (the crate is published
+as `gitty-tui` because `gitty` is taken on crates.io). To build from a
+checkout instead:
+
+```sh
 git clone <your repository URL> gitty
 cd gitty
 cargo install --path .
 ```
 
-This installs the `gitty` binary to `~/.cargo/bin`. To try it without
-installing:
+To try it without installing:
 
 ```sh
 cargo run --release

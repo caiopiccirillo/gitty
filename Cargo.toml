@@ -1,5 +1,5 @@
 [package]
-name = "gitty"
+name = "gitty-tui"
 version = "0.3.0"
 edition = "2024"
 description = "A terminal user interface for reviewing and staging git changes"
@@ -9,6 +9,15 @@ repository = "https://github.com/caiopiccirillo/gitty"
 rust-version = "1.85"
 keywords = ["git", "tui", "terminal", "staging", "diff"]
 categories = ["command-line-utilities", "development-tools"]
+
+# The crate is published as `gitty-tui` because `gitty` is taken on
+# crates.io; the binary and the library keep the `gitty` name.
+[[bin]]
+name = "gitty"
+path = "src/main.rs"
+
+[lib]
+name = "gitty"
 
 [dependencies]
 anyhow = "1.0.104"
