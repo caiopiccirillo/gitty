@@ -139,9 +139,14 @@ fn render_files(frame: &mut Frame, app: &mut App, area: Rect) {
                     let mut spans = vec![Span::raw("  ".repeat(*depth))];
                     match app.mode {
                         Mode::Classic => {
-                            let file = app
-                                .selected_file_index_in(app.side)
-                                .and_then(|i| app.diff_of(app.side).files.get(i));
+                            // The badge reflects this row's file on the
+                            // focused side, not the selected row.
+                            let file = match app.side {
+                                Side::Unstaged => {
+                                    entry.unstaged.and_then(|i| app.unstaged.files.get(i))
+                                }
+                                Side::Staged => entry.staged.and_then(|i| app.staged.files.get(i)),
+                            };
                             if let Some(file) = file {
                                 let (letter, color) = status_badge(file.status);
                                 spans.push(Span::styled(format!("{letter} "), Style::new().fg(color)));
@@ -440,6 +445,33 @@ mod tests {
         assert!(screen.contains("+alpha"));
         assert!(!screen.contains("beta1"));
         assert!(!screen.contains("beta2"));
+    }
+
+    #[test]
+    fn file_rows_show_their_own_status_badge() {
+        let view = DiffView {
+            lines: Vec::new(),
+            files: vec![
+                FileInfo {
+                    path: "a.txt".into(),
+                    status: FileStatus::Added,
+                },
+                FileInfo {
+                    path: "b.txt".into(),
+                    status: FileStatus::Modified,
+                },
+            ],
+        };
+        let mut app = App::new(view, DiffView::default(), PathBuf::from("/unused"));
+        let (screen, _) = render_app(&mut app, 80, 10);
+        assert!(screen.contains("A a.txt"));
+        assert!(screen.contains("M b.txt"));
+
+        // Moving the selection must not rewrite the badges of the rows.
+        press(&mut app, KeyCode::Char('j'));
+        let (screen, _) = render_app(&mut app, 80, 10);
+        assert!(screen.contains("A a.txt"));
+        assert!(screen.contains("M b.txt"));
     }
 
     #[test]
