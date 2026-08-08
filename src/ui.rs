@@ -9,20 +9,35 @@ use ratatui::{
     widgets::{Block, Clear, HighlightSpacing, List, ListItem, Paragraph},
 };
 
-use crate::app::{App, CommitInput, Focus, Tab};
-use crate::diff::{FileStatus, HunkId, LineKind};
+use crate::app::{App, CommitInput, Focus, Mode, Tab};
+use crate::diff::{FileInfo, FileStatus, HunkId, LineKind};
 use crate::tree::Node;
 
 pub fn render(frame: &mut Frame, app: &mut App) {
     let [main_area, status_area] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(frame.area());
-    let [files_area, diff_area] =
-        Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)])
+    match app.mode {
+        Mode::Classic => {
+            let [files_area, diff_area] =
+                Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)])
+                    .areas(main_area);
+            app.set_viewport_height(diff_area.height.saturating_sub(2) as usize);
+            render_files(frame, app, files_area);
+            render_diff(frame, app, diff_area, app.tab);
+        }
+        Mode::Split => {
+            let [files_area, staged_area, unstaged_area] = Layout::horizontal([
+                Constraint::Percentage(25),
+                Constraint::Percentage(37),
+                Constraint::Percentage(38),
+            ])
             .areas(main_area);
-    app.set_viewport_height(diff_area.height.saturating_sub(2) as usize);
-
-    render_files(frame, app, files_area);
-    render_diff(frame, app, diff_area);
+            app.set_viewport_height(staged_area.height.saturating_sub(2) as usize);
+            render_files(frame, app, files_area);
+            render_diff(frame, app, staged_area, Tab::Staged);
+            render_diff(frame, app, unstaged_area, Tab::Unstaged);
+        }
+    }
     frame.render_widget(status_bar(app), status_area);
     if let Some(ref input) = app.commit_input {
         render_commit_box(frame, input);
@@ -59,9 +74,12 @@ fn render_files(frame: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::Files;
     let (title, items) = {
         let diff = app.current_diff();
-        let title = match app.tab {
-            Tab::Unstaged => format!(" Unstaged ({}) ", diff.files.len()),
-            Tab::Staged => format!(" Staged ({}) ", diff.files.len()),
+        let title = match app.mode {
+            Mode::Classic => match app.tab {
+                Tab::Unstaged => format!(" Unstaged ({}) ", diff.files.len()),
+                Tab::Staged => format!(" Staged ({}) ", diff.files.len()),
+            },
+            Mode::Split => format!(" Files ({}) ", app.entries.len()),
         };
         let items: Vec<ListItem> = app
             .tree
@@ -88,14 +106,30 @@ fn render_files(frame: &mut Frame, app: &mut App, area: Rect) {
                     ]))
                 }
                 Node::File { file_idx, depth } => {
-                    let file = &diff.files[*file_idx];
-                    let (letter, color) = status_badge(file.status);
-                    let name = file.path.rsplit('/').next().unwrap_or(&file.path);
-                    ListItem::new(Line::from(vec![
-                        Span::raw("  ".repeat(*depth)),
-                        Span::styled(format!("{letter} "), Style::new().fg(color)),
-                        Span::raw(name.to_string()),
-                    ]))
+                    let name = match app.mode {
+                        Mode::Classic => diff.files[*file_idx].path.rsplit('/').next().unwrap_or("").to_string(),
+                        Mode::Split => app.entries[*file_idx]
+                            .path
+                            .rsplit('/')
+                            .next()
+                            .unwrap_or("")
+                            .to_string(),
+                    };
+                    let mut spans = vec![Span::raw("  ".repeat(*depth))];
+                    match app.mode {
+                        Mode::Classic => {
+                            let (letter, color) = status_badge(diff.files[*file_idx].status);
+                            spans.push(Span::styled(format!("{letter} "), Style::new().fg(color)));
+                        }
+                        Mode::Split => {
+                            let entry = &app.entries[*file_idx];
+                            let staged = entry.staged.and_then(|i| app.staged.files.get(i));
+                            let unstaged = entry.unstaged.and_then(|i| app.unstaged.files.get(i));
+                            spans.extend(merge_badge(staged, unstaged));
+                        }
+                    }
+                    spans.push(Span::raw(name));
+                    ListItem::new(Line::from(spans))
                 }
             })
             .collect();
@@ -120,21 +154,27 @@ fn render_files(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_stateful_widget(list, area, &mut app.files_state);
 }
 
-fn render_diff(frame: &mut Frame, app: &App, area: Rect) {
-    let title = match app.selected_node() {
-        Some(Node::File { file_idx, .. }) => app
-            .current_diff()
-            .files
-            .get(*file_idx)
-            .map(|file| format!(" {} ", file.path))
-            .unwrap_or_else(|| " diff ".into()),
-        Some(Node::Dir { path, .. }) => format!(" {path}/ "),
-        None => " diff ".into(),
+fn render_diff(frame: &mut Frame, app: &App, area: Rect, side: Tab) {
+    let title = match app.mode {
+        Mode::Classic => match app.selected_node() {
+            Some(Node::File { .. }) => app
+                .selected_file_index_in(side)
+                .and_then(|idx| app.diff_of(side).files.get(idx))
+                .map(|file| format!(" {} ", file.path))
+                .unwrap_or_else(|| " diff ".into()),
+            Some(Node::Dir { path, .. }) => format!(" {path}/ "),
+            None => " diff ".into(),
+        },
+        Mode::Split => match side {
+            Tab::Staged => format!(" Staged ({}) ", app.staged.files.len()),
+            Tab::Unstaged => format!(" Unstaged ({}) ", app.unstaged.files.len()),
+        },
     };
-    let block = pane_block(title, app.focus == Focus::Diff);
+    let focused = app.focus == Focus::Diff && app.tab == side;
+    let block = pane_block(title, focused);
 
     let lines: Vec<Line> = app
-        .display_lines()
+        .display_lines_for(side)
         .iter()
         .enumerate()
         .map(|(i, line)| {
@@ -148,22 +188,31 @@ fn render_diff(frame: &mut Frame, app: &App, area: Rect) {
             // terminal, where it would reset the cursor column.
             let text = format!("{prefix}{}", line.content.trim_end_matches('\r'));
             let mut style = style_for(line.kind);
-            let in_selection = app.selection_range().is_some_and(|r| r.contains(&i));
-            if in_selection || i == app.cursor {
+            let pane = app.pane_of(side);
+            let in_selection = app.selection_range_for(side).is_some_and(|r| r.contains(&i));
+            if in_selection || i == pane.cursor {
                 style = style.bg(Color::DarkGray);
                 if line.kind == LineKind::Meta {
                     // DarkGray on DarkGray would be unreadable.
                     style = style.fg(Color::Gray);
                 }
             }
-            if i == app.cursor && app.visual_anchor.is_some() {
+            if i == pane.cursor && pane.visual_anchor.is_some() {
                 // While selecting, the cursor end is a shade lighter.
                 style = style.bg(Color::Gray);
             }
             Line::styled(text, style)
         })
         .collect();
-    let scroll = u16::try_from(app.scroll).unwrap_or(u16::MAX);
+
+    if lines.is_empty() {
+        let empty = Paragraph::new("no changes")
+            .style(Style::new().fg(Color::DarkGray))
+            .block(block);
+        frame.render_widget(empty, area);
+        return;
+    }
+    let scroll = u16::try_from(app.pane_of(side).scroll).unwrap_or(u16::MAX);
     let diff = Paragraph::new(lines).block(block).scroll((scroll, 0));
     frame.render_widget(diff, area);
 }
@@ -175,7 +224,10 @@ fn status_bar(app: &App) -> Paragraph<'static> {
         Tab::Staged => "staged",
     };
     let selection = match app.selected_node() {
-        Some(Node::File { file_idx, .. }) => format!("file {}/{}", file_idx + 1, diff.files.len()),
+        Some(Node::File { file_idx, .. }) => match app.mode {
+            Mode::Classic => format!("file {}/{}", file_idx + 1, diff.files.len()),
+            Mode::Split => format!("file {}/{}", file_idx + 1, app.entries.len()),
+        },
         Some(Node::Dir { file_count, .. }) => format!("dir ({file_count} file(s))"),
         None => "file 0/0".to_string(),
     };
@@ -236,16 +288,16 @@ fn status_bar(app: &App) -> Paragraph<'static> {
 fn hints(app: &App) -> &'static str {
     match (app.focus, app.tab) {
         (Focus::Files, Tab::Unstaged) => {
-            " Tab · j/k · space stage · d discard · h/l fold · c commit · q quit "
+            " Tab · j/k · space stage · d discard · h/l · m layout · c commit · q quit "
         }
         (Focus::Files, Tab::Staged) => {
-            " Tab · j/k · space unstage · d discard · h/l fold · c commit · q quit "
+            " Tab · j/k · space unstage · d discard · h/l · m layout · c commit · q quit "
         }
         (Focus::Diff, Tab::Unstaged) => {
-            " j/k change · n/p hunk · v select · s stage · d discard · c commit · q quit "
+            " j/k change · n/p hunk · v select · s stage · d discard · m layout · c commit · q quit "
         }
         (Focus::Diff, Tab::Staged) => {
-            " j/k change · n/p hunk · v select · u unstage · d discard · c commit · q quit "
+            " j/k change · n/p hunk · v select · u unstage · d discard · m layout · c commit · q quit "
         }
     }
 }
@@ -268,6 +320,21 @@ fn status_badge(status: FileStatus) -> (&'static str, Color) {
         FileStatus::TypeChange => ("T", Color::Magenta),
         FileStatus::Untracked => ("?", Color::Green),
     }
+}
+
+/// The lazygit-style two-letter badge of a merged file: staged status first,
+/// unstaged second (`MM`, ` M`, `A?`, ...). Untracked files show `??`.
+fn merge_badge(staged: Option<&FileInfo>, unstaged: Option<&FileInfo>) -> Vec<Span<'static>> {
+    let staged_letter = staged.map(|f| status_badge(f.status).0);
+    let unstaged_letter = unstaged.map(|f| status_badge(f.status).0);
+    let (staged, unstaged) = match (staged_letter, unstaged_letter) {
+        (None, Some("?")) => ("?", "?"),
+        (s, u) => (s.unwrap_or(" "), u.unwrap_or(" ")),
+    };
+    vec![
+        Span::styled(staged.to_string(), Style::new().fg(Color::Green)),
+        Span::styled(format!("{unstaged} "), Style::new().fg(Color::Red)),
+    ]
 }
 
 fn style_for(kind: LineKind) -> Style {
@@ -436,6 +503,32 @@ mod tests {
         assert!(screen.contains("discard hunk 1 of a.txt?"));
         assert!(screen.contains("y confirm"));
         assert!(screen.contains("n cancel"));
+    }
+
+    #[test]
+    fn split_layout_renders_both_panes_side_by_side() {
+        let mut app = App::new(sample_view(), sample_view(), PathBuf::from("/unused"));
+        app.toggle_mode();
+        app.set_viewport_height(8);
+        let (screen, _) = render_app(&mut app, 120, 10);
+        // The files pane is shared and merged; the diff panes are labeled.
+        assert!(screen.contains("Files (2)"));
+        assert!(screen.contains("Staged (2)"));
+        assert!(screen.contains("Unstaged (2)"));
+        // Both panes show the selected file's diff (a.txt, one addition).
+        assert!(screen.contains("+alpha"));
+        // Merged rows carry the two-letter badge (staged M + unstaged M).
+        assert!(screen.contains("MM"));
+    }
+
+    #[test]
+    fn split_layout_shows_empty_panes_for_side_less_files() {
+        let mut app = App::new(sample_view(), DiffView::default(), PathBuf::from("/unused"));
+        app.toggle_mode();
+        app.set_viewport_height(8);
+        let (screen, _) = render_app(&mut app, 120, 10);
+        // a.txt has no staged changes: the staged pane is empty for it.
+        assert!(screen.contains("no changes"));
     }
 
     #[test]

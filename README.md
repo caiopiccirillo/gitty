@@ -14,9 +14,12 @@ binary and no C toolchain at build time.
 
 ## Features
 
+- Two layouts, switchable with one key: the classic single diff pane, or a
+  lazygit-style split with the staged and unstaged panes side by side.
 - Unstaged and staged diff views, switchable with one key.
 - A collapsible file tree with status badges (added, modified, deleted,
-  type change, untracked).
+  type change, untracked) — in the split layout the tree merges both sides
+  and rows carry two-letter badges like `MM` or `??`.
 - Stage or unstage entire files and directories.
 - Stage or unstage individual hunks, or just the lines you select with the
   visual selection mode.
@@ -56,8 +59,17 @@ gitiff ~/projects/my-repo/src
 
 The left pane lists the changed files (directories first, collapsible). The
 right pane shows the diff of the selected file, with a line cursor. A status
-bar at the bottom shows which tab you are on, the selected file, and the
+bar at the bottom shows which side is focused, the selected file, and the
 hunk under the cursor.
+
+Two layouts are available, toggled with `m`:
+
+- **Classic** — one diff pane at a time; `Tab` switches between the staged
+  and unstaged views.
+- **Split** — the staged and unstaged panes side by side, with a shared
+  file tree that merges both sides (`MM` means the file has both staged and
+  unstaged changes). `Tab` moves the focus between the panes; each pane
+  keeps its own cursor, and the `s`/`u`/`d` keys act on the focused one.
 
 ### Basic workflow
 
@@ -80,8 +92,9 @@ Global:
 | Key            | Action                              |
 | -------------- | ----------------------------------- |
 | `q`, `Ctrl+C`  | Quit                                |
-| `Tab`          | Switch between unstaged and staged  |
+| `Tab`          | Switch the focused side (and the shown pane in the classic layout) |
 | `c`            | Open the commit message box         |
+| `m`            | Toggle between the classic and split layouts |
 
 Commit message box:
 

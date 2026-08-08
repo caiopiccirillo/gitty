@@ -1,10 +1,15 @@
-//! Application state: the two diffs, the files pane tree, the diff cursor
+//! Application state: the two diffs, the files pane tree, the diff cursors
 //! and the staging actions.
 //!
 //! Navigation is a three-level hierarchy: the file tree (left pane), the
 //! hunks of the selected entry, and a per-line cursor inside the diff
 //! (right pane). The hunk under the cursor is the target of stage/unstage.
 //! Key handling and cursor movement live in [`input`].
+//!
+//! Two layouts are supported: the classic single diff pane (the focused
+//! side only) and a lazygit-style split with the staged and unstaged panes
+//! side by side. Each side keeps its own cursor state ([`PaneState`]) so
+//! moving the focus never loses your place.
 
 mod input;
 
@@ -21,13 +26,51 @@ use ratatui::widgets::ListState;
 use crate::diff::{DiffLine, DiffView, FileInfo, HunkId, LineKind, SelectedLines};
 use crate::git;
 use crate::refresh::{self, RefreshOutcome};
-use crate::tree::{self, Node};
+use crate::tree::{self, FileEntry, Node};
 
-/// Which side of the staging area is shown.
+/// Which side of the staging area is focused (and, in the classic layout,
+/// which one is shown).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Unstaged,
     Staged,
+}
+
+impl Tab {
+    /// Index into [`App::panes`].
+    pub fn index(self) -> usize {
+        match self {
+            Tab::Unstaged => 0,
+            Tab::Staged => 1,
+        }
+    }
+
+    pub fn other(self) -> Tab {
+        match self {
+            Tab::Unstaged => Tab::Staged,
+            Tab::Staged => Tab::Unstaged,
+        }
+    }
+}
+
+/// The screen layout: the classic single diff pane, or the lazygit-style
+/// split with the staged and unstaged panes side by side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Mode {
+    #[default]
+    Classic,
+    Split,
+}
+
+/// Cursor state of one diff pane (staged or unstaged).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PaneState {
+    /// Cursor line within the selected file's displayed diff.
+    pub cursor: usize,
+    /// Where a visual line selection was started with `v`, if any.
+    pub visual_anchor: Option<usize>,
+    /// Scroll offset of the diff pane, relative to the displayed lines.
+    pub scroll: usize,
 }
 
 /// Which pane has keyboard focus.
@@ -40,10 +83,16 @@ pub enum Focus {
 pub struct App {
     pub unstaged: DiffView,
     pub staged: DiffView,
+    /// The focused side: the one shown in the classic layout and the one
+    /// the diff keys act on in both layouts.
     pub tab: Tab,
+    pub mode: Mode,
     pub focus: Focus,
     /// Visible rows of the files pane tree (directories + files).
     pub tree: Vec<Node>,
+    /// Merged file list the split-mode tree is built from; the file rows of
+    /// `tree` index into it.
+    pub entries: Vec<FileEntry>,
     /// Directory paths the user has collapsed.
     pub collapsed_dirs: HashSet<String>,
     /// Selected row in the files pane tree.
@@ -51,12 +100,8 @@ pub struct App {
     /// Scroll state of the files pane; ratatui manages the offset so the
     /// selection stays visible in long lists.
     pub files_state: ListState,
-    /// Cursor line within the selected file's displayed diff.
-    pub cursor: usize,
-    /// Where a visual line selection was started with `v`, if any.
-    pub visual_anchor: Option<usize>,
-    /// Scroll offset of the diff pane, relative to the displayed lines.
-    pub scroll: usize,
+    /// Per-side cursor state of the two diff panes.
+    pub panes: [PaneState; 2],
     /// The commit message being typed (`c`), if the commit box is open.
     pub commit_input: Option<CommitInput>,
     /// A destructive discard awaiting confirmation (`d` then `y`).
@@ -94,14 +139,14 @@ impl App {
             unstaged,
             staged,
             tab: Tab::Unstaged,
+            mode: Mode::Classic,
             focus: Focus::Files,
             tree: Vec::new(),
+            entries: Vec::new(),
             collapsed_dirs: HashSet::new(),
             selected_row: 0,
             files_state: ListState::default().with_selected(Some(0)),
-            cursor: 0,
-            visual_anchor: None,
-            scroll: 0,
+            panes: [PaneState::default(); 2],
             commit_input: None,
             discard_confirm: None,
             message: None,
@@ -116,23 +161,68 @@ impl App {
     }
 
     pub fn current_diff(&self) -> &DiffView {
-        match self.tab {
+        self.diff_of(self.tab)
+    }
+
+    pub fn diff_of(&self, side: Tab) -> &DiffView {
+        match side {
             Tab::Unstaged => &self.unstaged,
             Tab::Staged => &self.staged,
         }
     }
 
-    /// Lines shown in the diff pane. For a file: its diff without the
-    /// `diff --git`/`index`/`---`/`+++` header lines (the pane title shows
-    /// the path instead). For a directory: the diffs of all files beneath
-    /// it, concatenated, keeping each file's header lines as separators.
+    /// Pane state of the focused side.
+    pub fn pane(&self) -> &PaneState {
+        &self.panes[self.tab.index()]
+    }
+
+    pub fn pane_mut(&mut self) -> &mut PaneState {
+        &mut self.panes[self.tab.index()]
+    }
+
+    /// Pane state of `side`, for rendering both panes in the split layout.
+    pub fn pane_of(&self, side: Tab) -> &PaneState {
+        &self.panes[side.index()]
+    }
+
+    pub fn pane_of_mut(&mut self, side: Tab) -> &mut PaneState {
+        &mut self.panes[side.index()]
+    }
+
+    /// Cursor of the focused pane.
+    pub fn cursor(&self) -> usize {
+        self.pane().cursor
+    }
+
+    pub fn scroll(&self) -> usize {
+        self.pane().scroll
+    }
+
+    pub fn visual_anchor(&self) -> Option<usize> {
+        self.pane().visual_anchor
+    }
+
+    /// Lines shown in the diff pane of the focused side. For a file: its
+    /// diff without the `diff --git`/`index`/`---`/`+++` header lines (the
+    /// pane title shows the path instead). For a directory: the diffs of
+    /// all files beneath it, concatenated, keeping each file's header lines
+    /// as separators.
     pub fn display_lines(&self) -> Vec<&DiffLine> {
-        let diff = self.current_diff();
+        self.display_lines_for(self.tab)
+    }
+
+    /// Like [`display_lines`](Self::display_lines), but for a specific side
+    /// (the split layout renders both).
+    pub fn display_lines_for(&self, side: Tab) -> Vec<&DiffLine> {
+        let diff = self.diff_of(side);
         match self.selected_node() {
-            Some(&Node::File { file_idx, .. }) => file_display_lines(diff, file_idx),
+            Some(&Node::File { .. }) => self
+                .selected_file_index_in(side)
+                .map(|idx| file_display_lines(diff, idx))
+                .unwrap_or_default(),
             Some(Node::Dir { path, .. }) => {
                 let mut lines = Vec::new();
-                for idx in self.dir_file_indices(path) {
+                for idx in self.dir_file_indices(side, path) {
                     if let Some(range) = diff.file_line_range(idx) {
                         lines.extend(diff.lines[range].iter());
                     }
@@ -148,18 +238,29 @@ impl App {
         self.tree.get(self.selected_row)
     }
 
-    /// File index of the selection, when it is a file row.
-    fn selected_file_idx(&self) -> Option<usize> {
-        match self.selected_node() {
-            Some(Node::File { file_idx, .. }) => Some(*file_idx),
-            _ => None,
+    /// The index of the selected row in the diff of `side`, if that side
+    /// has changes for it. In the classic layout only the focused side's
+    /// tree exists; in the split layout the merged entry resolves per side.
+    pub fn selected_file_index_in(&self, side: Tab) -> Option<usize> {
+        let &Node::File { file_idx, .. } = self.selected_node()? else {
+            return None;
+        };
+        match self.mode {
+            Mode::Classic => (self.tab == side).then_some(file_idx),
+            Mode::Split => {
+                let entry = &self.entries[file_idx];
+                match side {
+                    Tab::Staged => entry.staged,
+                    Tab::Unstaged => entry.unstaged,
+                }
+            }
         }
     }
 
-    /// Indices of all files beneath a directory, recursively.
-    fn dir_file_indices(&self, dir: &str) -> Vec<usize> {
+    /// Indices of all files beneath a directory on one side, recursively.
+    fn dir_file_indices(&self, side: Tab, dir: &str) -> Vec<usize> {
         let prefix = format!("{dir}/");
-        self.current_diff()
+        self.diff_of(side)
             .files
             .iter()
             .enumerate()
@@ -168,11 +269,11 @@ impl App {
             .collect()
     }
 
-    /// All files beneath a directory, recursively.
-    fn dir_files(&self, dir: &str) -> Vec<FileInfo> {
-        self.dir_file_indices(dir)
+    /// All files beneath a directory on one side, recursively.
+    fn dir_files(&self, side: Tab, dir: &str) -> Vec<FileInfo> {
+        self.dir_file_indices(side, dir)
             .into_iter()
-            .filter_map(|i| self.current_diff().files.get(i).cloned())
+            .filter_map(|i| self.diff_of(side).files.get(i).cloned())
             .collect()
     }
 
@@ -185,7 +286,15 @@ impl App {
 
     /// Rebuild the files pane tree and keep the selection valid.
     fn rebuild_tree(&mut self) {
-        self.tree = tree::visible_rows(&self.current_diff().files, &self.collapsed_dirs);
+        match self.mode {
+            Mode::Classic => {
+                self.tree = tree::visible_rows(&self.current_diff().files, &self.collapsed_dirs);
+            }
+            Mode::Split => {
+                self.entries = tree::merge_files(&self.staged.files, &self.unstaged.files);
+                self.tree = tree::visible_rows_merged(&self.entries, &self.collapsed_dirs);
+            }
+        }
         self.selected_row = if self.tree.is_empty() {
             0
         } else {
@@ -194,10 +303,23 @@ impl App {
         self.files_state.select(Some(self.selected_row));
     }
 
+    /// Switch between the classic single-pane layout and the split layout.
+    pub fn toggle_mode(&mut self) {
+        self.mode = match self.mode {
+            Mode::Classic => Mode::Split,
+            Mode::Split => Mode::Classic,
+        };
+        self.focus = Focus::Files;
+        self.selected_row = 0;
+        self.panes = [PaneState::default(); 2];
+        self.rebuild_tree();
+        self.snap_to_first_change();
+    }
+
     /// Hunk under the cursor — the target of stage/unstage.
     pub fn current_hunk(&self) -> Option<HunkId> {
         let lines = self.display_lines();
-        let line = lines.get(self.cursor)?;
+        let line = lines.get(self.pane().cursor)?;
         line.hunk_idx.map(|hunk_idx| HunkId {
             file_idx: line.file_idx,
             hunk_idx,
@@ -206,7 +328,9 @@ impl App {
 
     pub fn set_viewport_height(&mut self, height: usize) {
         self.viewport_height = height;
-        self.clamp_cursor();
+        for side in [Tab::Unstaged, Tab::Staged] {
+            self.clamp_cursor_for(side);
+        }
     }
 
     /// Stage the hunk under the cursor (unstaged tab).
@@ -235,7 +359,7 @@ impl App {
 
     fn with_file(&mut self, verb: &str, op: impl FnOnce(&Path, &FileInfo) -> Result<()>) {
         let Some(file) = self
-            .selected_file_idx()
+            .selected_file_index_in(self.tab)
             .and_then(|i| self.current_diff().files.get(i))
             .cloned()
         else {
@@ -262,7 +386,7 @@ impl App {
     }
 
     fn with_dir(&mut self, verb: &str, dir: &str, op: impl Fn(&Path, &FileInfo) -> Result<()>) {
-        let files = self.dir_files(dir);
+        let files = self.dir_files(self.tab, dir);
         self.message = match files
             .iter()
             .try_for_each(|f| op(&self.repo_path, f))
@@ -275,15 +399,22 @@ impl App {
 
     /// Range of display lines covered by the visual selection, if active.
     pub fn selection_range(&self) -> Option<Range<usize>> {
-        let anchor = self.visual_anchor?;
-        Some(anchor.min(self.cursor)..anchor.max(self.cursor) + 1)
+        self.selection_range_for(self.tab)
+    }
+
+    /// Like [`selection_range`](Self::selection_range), but for a specific
+    /// pane.
+    pub fn selection_range_for(&self, side: Tab) -> Option<Range<usize>> {
+        let pane = self.pane_of(side);
+        let anchor = pane.visual_anchor?;
+        Some(anchor.min(pane.cursor)..anchor.max(pane.cursor) + 1)
     }
 
     /// The changed (`+`/`-`) lines covered by the visual selection, as
     /// per-hunk ordinals consumed by git::stage_lines/unstage_lines.
     fn selected_lines(&self) -> Option<(HunkId, SelectedLines)> {
         let range = self.selection_range()?;
-        let anchor = self.visual_anchor?;
+        let anchor = self.pane().visual_anchor?;
         let lines = self.display_lines();
         let hunk = HunkId {
             file_idx: lines.get(anchor)?.file_idx,
@@ -346,8 +477,15 @@ impl App {
         let staged = self.tab == Tab::Staged;
         let action = match self.focus {
             Focus::Files => match self.selected_node().cloned() {
-                Some(Node::File { file_idx, .. }) => {
-                    let file = self.current_diff().files[file_idx].clone();
+                Some(Node::File { .. }) => {
+                    let Some(file) = self
+                        .selected_file_index_in(self.tab)
+                        .and_then(|i| self.current_diff().files.get(i))
+                        .cloned()
+                    else {
+                        self.message = Some("nothing to discard on this side".into());
+                        return;
+                    };
                     DiscardAction::File(file, staged)
                 }
                 Some(Node::Dir { path, .. }) => DiscardAction::Dir(path, staged),
@@ -365,7 +503,7 @@ impl App {
                         selected,
                         staged,
                     },
-                    None if self.visual_anchor.is_some() => {
+                    None if self.pane().visual_anchor.is_some() => {
                         self.message = Some("no changed lines selected".into());
                         return;
                     }
@@ -446,7 +584,8 @@ impl App {
                 }
             }
             DiscardAction::Dir(path, staged) => {
-                for file in self.dir_files(&path) {
+                let side = if staged { Tab::Staged } else { Tab::Unstaged };
+                for file in self.dir_files(side, &path) {
                     if staged {
                         git::discard_staged_file(&repo_path, &file)?;
                     } else {
@@ -482,7 +621,7 @@ impl App {
     /// Apply any finished background snapshot (called on idle ticks; cheap
     /// no-op when the channel is empty).
     pub fn poll_refresh(&mut self) {
-        if self.visual_anchor.is_some() {
+        if self.pane().visual_anchor.is_some() {
             return; // apply later, when the selection is done
         }
         let Some(rx) = &self.refresh_rx else {
@@ -501,7 +640,7 @@ impl App {
 
     /// Synchronous refresh used by tests and explicit calls.
     pub fn auto_refresh(&mut self) {
-        if self.visual_anchor.is_none() {
+        if self.pane().visual_anchor.is_none() {
             let _ = self.refresh();
         }
     }
@@ -540,24 +679,32 @@ impl App {
             return;
         }
         let identity = self.selected_node().map(|n| self.identity_of(n));
-        let (cursor, scroll) = (self.cursor, self.scroll);
+        let saved = self.panes.map(|pane| (pane.cursor, pane.scroll));
         self.unstaged = unstaged;
         self.staged = staged;
         self.rebuild_tree();
         if self.tree.is_empty() {
             self.focus = Focus::Files;
         }
-        self.visual_anchor = None;
+        for pane in &mut self.panes {
+            pane.visual_anchor = None;
+        }
         if let Some(row) = identity.and_then(|id| self.find_row(&id)) {
             self.selected_row = row;
             self.files_state.select(Some(row));
-            self.cursor = cursor;
-            self.scroll = scroll;
+            for (pane, (cursor, scroll)) in self.panes.iter_mut().zip(saved) {
+                pane.cursor = cursor;
+                pane.scroll = scroll;
+            }
         } else {
-            self.cursor = 0;
-            self.scroll = 0;
+            for pane in &mut self.panes {
+                pane.cursor = 0;
+                pane.scroll = 0;
+            }
         }
-        self.clamp_cursor();
+        for side in [Tab::Unstaged, Tab::Staged] {
+            self.clamp_cursor_for(side);
+        }
     }
 
     /// Path-based identity of a tree row, so it can be re-found after a
@@ -565,9 +712,7 @@ impl App {
     fn identity_of(&self, node: &Node) -> NodeIdentity {
         match node {
             Node::Dir { path, .. } => NodeIdentity::Dir(path.clone()),
-            Node::File { file_idx, .. } => {
-                NodeIdentity::File(self.current_diff().files[*file_idx].path.clone())
-            }
+            Node::File { file_idx, .. } => NodeIdentity::File(self.file_path_at(*file_idx)),
         }
     }
 
@@ -575,10 +720,19 @@ impl App {
         self.tree.iter().position(|node| match (node, identity) {
             (Node::Dir { path, .. }, NodeIdentity::Dir(want)) => path == want,
             (Node::File { file_idx, .. }, NodeIdentity::File(want)) => {
-                self.current_diff().files[*file_idx].path == *want
+                self.file_path_at(*file_idx) == *want
             }
             _ => false,
         })
+    }
+
+    /// The path of a file row: the merged entry in split mode, the focused
+    /// diff's file in classic mode.
+    fn file_path_at(&self, file_idx: usize) -> String {
+        match self.mode {
+            Mode::Classic => self.current_diff().files[file_idx].path.clone(),
+            Mode::Split => self.entries[file_idx].path.clone(),
+        }
     }
 }
 
@@ -692,6 +846,39 @@ mod tests {
         app
     }
 
+    /// A staged view with one added file, for the split-layout tests.
+    fn staged_view() -> DiffView {
+        let line = |kind: LineKind, file_idx: usize, hunk_idx: Option<usize>| DiffLine {
+            kind,
+            content: String::new(),
+            file_idx,
+            hunk_idx,
+        };
+        DiffView {
+            lines: vec![
+                line(LineKind::FileHeader, 0, None),
+                line(LineKind::HunkHeader, 0, Some(0)),
+                line(LineKind::Addition, 0, Some(0)),
+            ],
+            files: vec![FileInfo {
+                path: "x.txt".into(),
+                status: FileStatus::Added,
+            }],
+        }
+    }
+
+    /// Classic app with both sides populated, switched to split mode.
+    fn split_app() -> App {
+        let mut app = App::new(
+            two_file_view(),
+            staged_view(),
+            PathBuf::from("/unused"),
+        );
+        app.set_viewport_height(10);
+        app.toggle_mode();
+        app
+    }
+
     fn press(app: &mut App, code: KeyCode) {
         app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
     }
@@ -719,9 +906,9 @@ mod tests {
         assert_eq!(app.focus, Focus::Diff);
         // File 0 displays 2 lines: the hunk header and one addition.
         press(&mut app, KeyCode::Char('j'));
-        assert_eq!(app.cursor, 1);
+        assert_eq!(app.cursor(), 1);
         press(&mut app, KeyCode::Char('j'));
-        assert_eq!(app.cursor, 1, "clamped at last line");
+        assert_eq!(app.cursor(), 1, "clamped at last line");
         press(&mut app, KeyCode::Esc);
         assert_eq!(app.focus, Focus::Files);
     }
@@ -732,15 +919,15 @@ mod tests {
         // File 1 displays: [hunk0 header, deletion, hunk1 header, deletion].
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Enter);
-        assert_eq!(app.cursor, 1, "snaps to the first changed line");
+        assert_eq!(app.cursor(), 1, "snaps to the first changed line");
         press(&mut app, KeyCode::Char('n'));
-        assert_eq!(app.cursor, 3, "lands on the next hunk's changed line");
+        assert_eq!(app.cursor(), 3, "lands on the next hunk's changed line");
         press(&mut app, KeyCode::Char('n'));
-        assert_eq!(app.cursor, 3, "no next hunk");
+        assert_eq!(app.cursor(), 3, "no next hunk");
         press(&mut app, KeyCode::Char('p'));
-        assert_eq!(app.cursor, 1);
+        assert_eq!(app.cursor(), 1);
         press(&mut app, KeyCode::Char('p'));
-        assert_eq!(app.cursor, 1, "no previous hunk");
+        assert_eq!(app.cursor(), 1, "no previous hunk");
     }
 
     #[test]
@@ -773,13 +960,13 @@ mod tests {
         // File 1 displays: [hunk0 header, deletion, hunk1 header, deletion].
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Enter);
-        assert_eq!(app.cursor, 1, "snaps to the first changed line");
+        assert_eq!(app.cursor(), 1, "snaps to the first changed line");
         press(&mut app, KeyCode::Char('j'));
-        assert_eq!(app.cursor, 3, "j jumps to the next changed line");
+        assert_eq!(app.cursor(), 3, "j jumps to the next changed line");
         press(&mut app, KeyCode::Char('j'));
-        assert_eq!(app.cursor, 3, "clamped at the last changed line");
+        assert_eq!(app.cursor(), 3, "clamped at the last changed line");
         press(&mut app, KeyCode::Char('k'));
-        assert_eq!(app.cursor, 1);
+        assert_eq!(app.cursor(), 1);
     }
 
     #[test]
@@ -789,11 +976,11 @@ mod tests {
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Enter);
         press(&mut app, KeyCode::Char('G'));
-        assert_eq!(app.cursor, 3);
-        assert_eq!(app.scroll, 3);
+        assert_eq!(app.cursor(), 3);
+        assert_eq!(app.scroll(), 3);
         press(&mut app, KeyCode::Char('g'));
-        assert_eq!(app.cursor, 1);
-        assert_eq!(app.scroll, 1);
+        assert_eq!(app.cursor(), 1);
+        assert_eq!(app.scroll(), 1);
     }
 
     #[test]
@@ -810,7 +997,7 @@ mod tests {
             "the hunk has only one changed line"
         );
         press(&mut app, KeyCode::Esc);
-        assert_eq!(app.visual_anchor, None);
+        assert_eq!(app.visual_anchor(), None);
         assert_eq!(app.focus, Focus::Diff, "Esc only cancels the selection");
         press(&mut app, KeyCode::Esc);
         assert_eq!(app.focus, Focus::Files);
@@ -866,6 +1053,61 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn split_mode_merges_both_sides_into_the_tree() {
+        let mut app = split_app();
+        let paths: Vec<&str> = app.entries.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, ["a.txt", "b.txt", "x.txt"]);
+        assert_eq!(app.tree.len(), 3);
+
+        // x.txt only exists on the staged side.
+        let x = app.entries.iter().position(|e| e.path == "x.txt").unwrap();
+        assert_eq!(app.entries[x].staged, Some(0));
+        assert_eq!(app.entries[x].unstaged, None);
+
+        // Selecting it shows a diff in the staged pane and nothing in the
+        // unstaged one.
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.selected_file_index_in(Tab::Staged), Some(0));
+        assert_eq!(app.selected_file_index_in(Tab::Unstaged), None);
+        assert_eq!(app.display_lines_for(Tab::Staged).len(), 2);
+        assert!(app.display_lines_for(Tab::Unstaged).is_empty());
+    }
+
+    #[test]
+    fn split_mode_keeps_per_pane_cursors_when_switching_focus() {
+        let mut app = split_app();
+        // File a.txt (two hunks) on the unstaged side.
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.tab, Tab::Unstaged);
+        press(&mut app, KeyCode::Char('n'));
+        let unstaged_cursor = app.cursor();
+        assert!(unstaged_cursor > 0);
+
+        // Tab only moves the focus: selection and cursors are preserved.
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.tab, Tab::Staged);
+        assert_eq!(app.selected_row, 0, "selection preserved");
+        assert_eq!(app.focus, Focus::Diff, "focus stays in the diff");
+
+        // The staged pane has its own cursor (a.txt is not staged: empty).
+        assert_eq!(app.cursor(), 0);
+
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.cursor(), unstaged_cursor, "unstaged cursor preserved");
+    }
+
+    #[test]
+    fn tab_in_split_mode_keeps_the_selection() {
+        let mut app = split_app();
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.selected_row, 1);
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.selected_row, 1, "selection kept when moving focus");
+        assert_eq!(app.focus, Focus::Files, "files focus untouched");
     }
 
     /// src/app.rs, src/git/ops.rs, top.rs — one hunk each.

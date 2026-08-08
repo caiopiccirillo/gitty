@@ -3,10 +3,50 @@
 //! The flat list of changed files is grouped by directory into visible
 //! rows; collapsed directories hide their children but stay selected-aware
 //! (their row shows the recursive file count).
+//!
+//! Two sources feed the tree: a single side's file list (classic layout)
+//! and the merge of both sides (split layout), where every row knows which
+//! side(s) it has changes on.
 
 use std::collections::{BTreeMap, HashSet};
 
 use crate::diff::FileInfo;
+
+/// One file of the merged tree: the same path in both diffs, or only in
+/// one. The indices point into `DiffView::files` of the respective side.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileEntry {
+    pub path: String,
+    /// Index into the staged diff's files, if staged.
+    pub staged: Option<usize>,
+    /// Index into the unstaged diff's files, if unstaged.
+    pub unstaged: Option<usize>,
+}
+
+/// Merge both diffs' file lists by path, in path order.
+pub fn merge_files(staged: &[FileInfo], unstaged: &[FileInfo]) -> Vec<FileEntry> {
+    let mut entries: Vec<FileEntry> = staged
+        .iter()
+        .enumerate()
+        .map(|(i, f)| FileEntry {
+            path: f.path.clone(),
+            staged: Some(i),
+            unstaged: None,
+        })
+        .collect();
+    for (i, file) in unstaged.iter().enumerate() {
+        match entries.iter_mut().find(|e| e.path == file.path) {
+            Some(entry) => entry.unstaged = Some(i),
+            None => entries.push(FileEntry {
+                path: file.path.clone(),
+                staged: None,
+                unstaged: Some(i),
+            }),
+        }
+    }
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    entries
+}
 
 /// One visible row in the files pane.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,7 +59,9 @@ pub enum Node {
         collapsed: bool,
         file_count: usize,
     },
-    /// A file, referencing `DiffView::files[file_idx]`.
+    /// A file, referencing the file list the tree was built from:
+    /// `DiffView::files[file_idx]` in classic mode, `FileEntry::[file_idx]`
+    /// in split mode.
     File { file_idx: usize, depth: usize },
 }
 
@@ -37,13 +79,28 @@ pub fn parent_dir(path: &str) -> Option<&str> {
 /// Build the visible rows from a file list, honoring collapsed directories.
 /// Directories sort before the files of their level; both alphabetically.
 pub fn visible_rows(files: &[FileInfo], collapsed: &HashSet<String>) -> Vec<Node> {
+    build_rows(files.len(), collapsed, &|i| &files[i].path)
+}
+
+/// Build the visible rows from the merged file entries.
+pub fn visible_rows_merged(entries: &[FileEntry], collapsed: &HashSet<String>) -> Vec<Node> {
+    build_rows(entries.len(), collapsed, &|i| &entries[i].path)
+}
+
+/// Shared row building over `n` files whose paths come from `path_of`.
+fn build_rows<'a>(
+    n: usize,
+    collapsed: &HashSet<String>,
+    path_of: &dyn Fn(usize) -> &'a str,
+) -> Vec<Node> {
     // children[dir] = direct subdirectory paths; own[dir] = file indices
     // directly inside dir. The root is the empty string.
     let mut children: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     let mut own: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
 
-    for (idx, file) in files.iter().enumerate() {
-        let parent = parent_dir(&file.path).unwrap_or("");
+    for idx in 0..n {
+        let path = path_of(idx);
+        let parent = parent_dir(path).unwrap_or("");
         own.entry(parent).or_default().push(idx);
         // Register every ancestor directory as a child of its parent.
         let mut ancestor = parent;
@@ -213,5 +270,40 @@ mod tests {
     fn parent_dir_of_top_level_is_none() {
         assert_eq!(parent_dir("a/b/c.rs"), Some("a/b"));
         assert_eq!(parent_dir("a.rs"), None);
+    }
+
+    #[test]
+    fn merge_files_joins_sides_by_path() {
+        let staged = files(&["b.txt", "c.txt"]);
+        let unstaged = files(&["a.txt", "c.txt"]);
+        let entries = merge_files(&staged, &unstaged);
+        assert_eq!(
+            entries,
+            vec![
+                FileEntry { path: "a.txt".into(), staged: None, unstaged: Some(0) },
+                FileEntry { path: "b.txt".into(), staged: Some(0), unstaged: None },
+                FileEntry { path: "c.txt".into(), staged: Some(1), unstaged: Some(1) },
+            ]
+        );
+    }
+
+    #[test]
+    fn merged_tree_groups_dirs_like_the_single_side_tree() {
+        let entries = merge_files(
+            &files(&["src/app.rs"]),
+            &files(&["src/git/ops.rs", "top.rs"]),
+        );
+        let rows = visible_rows_merged(&entries, &HashSet::new());
+        let outline: Vec<String> = rows
+            .iter()
+            .map(|n| match n {
+                Node::Dir { name, .. } => format!("{name}/"),
+                Node::File { file_idx, .. } => entries[*file_idx].path.clone(),
+            })
+            .collect();
+        assert_eq!(
+            outline,
+            vec!["src/", "git/", "src/git/ops.rs", "src/app.rs", "top.rs"]
+        );
     }
 }

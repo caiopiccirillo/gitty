@@ -21,6 +21,7 @@ impl App {
             }
             (_, KeyCode::Tab) => self.switch_tab(),
             (_, KeyCode::Char('c')) => self.open_commit(),
+            (_, KeyCode::Char('m')) => self.toggle_mode(),
             _ => match self.focus {
                 Focus::Files => self.handle_files_key(key),
                 Focus::Diff => self.handle_diff_key(key),
@@ -137,7 +138,7 @@ impl App {
                 }
             }
             Some(Node::File { file_idx, .. }) => {
-                let path = self.current_diff().files[file_idx].path.clone();
+                let path = self.file_path_at(file_idx);
                 if let Some(row) = tree::parent_dir(&path).and_then(|p| self.dir_row(p)) {
                     self.select_row(row);
                 }
@@ -185,21 +186,21 @@ impl App {
                 self.focus = Focus::Files;
             }
             (_, KeyCode::Esc) => {
-                if self.visual_anchor.is_some() {
-                    self.visual_anchor = None;
+                if self.pane().visual_anchor.is_some() {
+                    self.pane_mut().visual_anchor = None;
                 } else {
                     self.focus = Focus::Files;
                 }
             }
             (_, KeyCode::Char('s')) if self.tab == Tab::Unstaged => {
-                if self.visual_anchor.is_some() {
+                if self.pane().visual_anchor.is_some() {
                     self.stage_selected_lines();
                 } else {
                     self.stage_selected_hunk();
                 }
             }
             (_, KeyCode::Char('u')) if self.tab == Tab::Staged => {
-                if self.visual_anchor.is_some() {
+                if self.pane().visual_anchor.is_some() {
                     self.unstage_selected_lines();
                 } else {
                     self.unstage_selected_hunk();
@@ -211,34 +212,46 @@ impl App {
     }
 
     fn toggle_visual(&mut self) {
-        self.visual_anchor = match self.visual_anchor {
+        if self.display_lines().is_empty() {
+            return;
+        }
+        let pane = self.pane_mut();
+        pane.visual_anchor = match pane.visual_anchor {
             Some(_) => None,
-            None if !self.display_lines().is_empty() => Some(self.cursor),
-            None => None,
+            None => Some(pane.cursor),
         };
     }
 
     fn switch_tab(&mut self) {
-        self.tab = match self.tab {
-            Tab::Unstaged => Tab::Staged,
-            Tab::Staged => Tab::Unstaged,
-        };
-        self.focus = Focus::Files;
-        self.selected_row = 0;
-        self.rebuild_tree();
-        self.cursor = 0;
-        self.scroll = 0;
-        self.visual_anchor = None;
-        self.snap_to_first_change();
+        match self.mode {
+            // The classic layout swaps which side is shown and resets the
+            // files selection, as before.
+            Mode::Classic => {
+                self.tab = self.tab.other();
+                self.focus = Focus::Files;
+                self.selected_row = 0;
+                self.rebuild_tree();
+                let pane = self.pane_mut();
+                pane.cursor = 0;
+                pane.scroll = 0;
+                pane.visual_anchor = None;
+                self.snap_to_first_change();
+            }
+            // The split layout keeps both panes visible; Tab only moves the
+            // focus between them, preserving the selection and the cursors.
+            Mode::Split => {
+                self.tab = self.tab.other();
+            }
+        }
     }
 
     fn select_row(&mut self, idx: usize) {
         self.selected_row = idx;
         self.files_state.select(Some(idx));
-        self.cursor = 0;
-        self.scroll = 0;
-        self.visual_anchor = None;
-        self.snap_to_first_change();
+        self.panes = [PaneState::default(); 2];
+        for side in [Tab::Unstaged, Tab::Staged] {
+            self.snap_to_first_change_for(side);
+        }
     }
 
     fn move_row(&mut self, delta: isize) {
@@ -249,73 +262,92 @@ impl App {
         self.select_row(next as usize);
     }
 
-    /// Move the cursor across the changed lines (`+`/`-`) of the diff;
-    /// `delta` counts changed lines, not display lines. While a visual
+    /// Move the cursor across the changed lines (`+`/`-`) of the focused
+    /// pane; `delta` counts changed lines, not display lines. While a visual
     /// selection is active the cursor stays inside its hunk so the selection
     /// always maps to a single, well-formed patch.
     fn move_cursor(&mut self, delta: isize) {
-        let bounds = self.cursor_bounds();
-        if bounds.is_empty() {
-            return;
-        }
-        let (start, end) = (bounds.start, bounds.end);
-        let lines = self.display_lines();
-        let positions = changed_positions(&lines[start..end]);
-        if positions.is_empty() {
-            return;
-        }
-        let current = positions
-            .binary_search(&self.cursor.saturating_sub(start))
-            .unwrap_or_else(|i| i.saturating_sub(1));
-        let next = (current as isize + delta).clamp(0, positions.len() as isize - 1) as usize;
-        self.cursor = start + positions[next];
-        self.clamp_cursor();
+        self.move_cursor_in(self.tab, delta);
     }
 
-    /// Jump to the first or last changed line of the current bounds.
-    fn move_to_edge(&mut self, first: bool) {
-        let bounds = self.cursor_bounds();
-        if bounds.is_empty() {
-            return;
-        }
-        let (start, end) = (bounds.start, bounds.end);
-        let lines = self.display_lines();
-        let positions = changed_positions(&lines[start..end]);
-        let edge = if first {
-            positions.first()
-        } else {
-            positions.last()
+    fn move_cursor_in(&mut self, side: Tab, delta: isize) {
+        let (start, positions, current) = {
+            let bounds = self.cursor_bounds_for(side);
+            if bounds.is_empty() {
+                return;
+            }
+            let (start, end) = (bounds.start, bounds.end);
+            let lines = self.display_lines_for(side);
+            let positions = changed_positions(&lines[start..end]);
+            if positions.is_empty() {
+                return;
+            }
+            let current = self.pane_of(side).cursor;
+            (start, positions, current)
         };
-        if let Some(&rel) = edge {
-            self.cursor = start + rel;
-            self.clamp_cursor();
+        let ord = positions
+            .binary_search(&current.saturating_sub(start))
+            .unwrap_or_else(|i| i.saturating_sub(1));
+        let next = (ord as isize + delta).clamp(0, positions.len() as isize - 1) as usize;
+        self.pane_of_mut(side).cursor = start + positions[next];
+        self.clamp_cursor_for(side);
+    }
+
+    /// Jump to the first or last changed line of the focused pane.
+    fn move_to_edge(&mut self, first: bool) {
+        self.move_to_edge_in(self.tab, first);
+    }
+
+    fn move_to_edge_in(&mut self, side: Tab, first: bool) {
+        let (start, edge) = {
+            let bounds = self.cursor_bounds_for(side);
+            if bounds.is_empty() {
+                return;
+            }
+            let (start, end) = (bounds.start, bounds.end);
+            let lines = self.display_lines_for(side);
+            let positions = changed_positions(&lines[start..end]);
+            let edge = if first {
+                positions.first().copied()
+            } else {
+                positions.last().copied()
+            };
+            (start, edge)
+        };
+        if let Some(rel) = edge {
+            self.pane_of_mut(side).cursor = start + rel;
+            self.clamp_cursor_for(side);
         }
     }
 
-    /// Lines the cursor may roam: the whole file diff normally, only the
-    /// selected hunk while a visual selection is active.
-    fn cursor_bounds(&self) -> Range<usize> {
-        match self.visual_anchor {
-            Some(anchor) => self.hunk_bounds_at(anchor),
-            None => 0..self.display_lines().len(),
+    /// Lines the cursor of `side` may roam: the whole file diff normally,
+    /// only the selected hunk while a visual selection is active.
+    fn cursor_bounds_for(&self, side: Tab) -> Range<usize> {
+        match self.pane_of(side).visual_anchor {
+            Some(anchor) => self.hunk_bounds_for(side, anchor),
+            None => 0..self.display_lines_for(side).len(),
         }
     }
 
-    /// Display-line range of the hunk containing display line `line_idx`:
-    /// from its `@@` header to just before the next header (or the end of
-    /// the file).
+    /// Display-line range of the hunk containing display line `line_idx` of
+    /// the focused pane: from its `@@` header to just before the next
+    /// header (or the end of the file).
     pub(super) fn hunk_bounds_at(&self, line_idx: usize) -> Range<usize> {
-        let len = self.display_lines().len();
+        self.hunk_bounds_for(self.tab, line_idx)
+    }
+
+    fn hunk_bounds_for(&self, side: Tab, line_idx: usize) -> Range<usize> {
+        let lines = self.display_lines_for(side);
+        let len = lines.len();
         if len == 0 {
             return 0..0;
         }
         let line_idx = line_idx.min(len - 1);
-        let start = self.display_lines()[..=line_idx]
+        let start = lines[..=line_idx]
             .iter()
             .rposition(|l| l.kind == LineKind::HunkHeader)
             .unwrap_or(0);
-        let end = self
-            .display_lines()
+        let end = lines
             .iter()
             .enumerate()
             .skip(start + 1)
@@ -325,51 +357,71 @@ impl App {
         start..end
     }
 
-    /// Move the cursor to the first changed line of the next/previous hunk.
+    /// Move the cursor of the focused pane to the first changed line of the
+    /// next/previous hunk.
     fn jump_hunk(&mut self, direction: isize) {
-        let lines = self.display_lines();
-        let hunks = hunk_first_changed_positions(&lines);
+        let (hunks, cursor) = {
+            let lines = self.display_lines();
+            (hunk_first_changed_positions(&lines), self.pane().cursor)
+        };
         let target = if direction > 0 {
-            hunks.iter().copied().find(|&pos| pos > self.cursor)
+            hunks.iter().copied().find(|&pos| pos > cursor)
         } else {
-            hunks.iter().copied().rev().find(|&pos| pos < self.cursor)
+            hunks.iter().copied().rev().find(|&pos| pos < cursor)
         };
         if let Some(pos) = target {
-            self.cursor = pos;
+            self.pane_mut().cursor = pos;
             self.clamp_cursor();
         }
     }
 
-    /// Land the cursor on the first changed line of the displayed diff.
-    fn snap_to_first_change(&mut self) {
-        let lines = self.display_lines();
-        if let Some(&pos) = changed_positions(&lines).first() {
-            self.cursor = pos;
-            self.clamp_cursor();
+    /// Land the cursor of the focused pane on the first changed line.
+    pub(super) fn snap_to_first_change(&mut self) {
+        self.snap_to_first_change_for(self.tab);
+    }
+
+    fn snap_to_first_change_for(&mut self, side: Tab) {
+        let first = {
+            let lines = self.display_lines_for(side);
+            changed_positions(&lines).first().copied()
+        };
+        if let Some(pos) = first {
+            self.pane_of_mut(side).cursor = pos;
+            self.clamp_cursor_for(side);
         }
     }
 
-    /// Keep the cursor inside the displayed lines and scroll so it stays
-    /// visible.
+    /// Keep the cursor of the focused pane inside the displayed lines and
+    /// scroll so it stays visible.
     pub(super) fn clamp_cursor(&mut self) {
-        let len = self.display_lines().len();
+        self.clamp_cursor_for(self.tab);
+    }
+
+    /// Keep the cursor of `side` inside the displayed lines and scroll so
+    /// it stays visible.
+    pub(super) fn clamp_cursor_for(&mut self, side: Tab) {
+        let (len, viewport) = {
+            let lines = self.display_lines_for(side);
+            (lines.len(), self.viewport_height)
+        };
+        let pane = self.pane_of_mut(side);
         if len == 0 {
-            self.cursor = 0;
-            self.scroll = 0;
+            pane.cursor = 0;
+            pane.scroll = 0;
             return;
         }
-        self.cursor = self.cursor.min(len - 1);
-        if self.viewport_height == 0 {
+        pane.cursor = pane.cursor.min(len - 1);
+        if viewport == 0 {
             // Before the first render there is no viewport yet; keep the
             // cursor position and leave scroll alone.
             return;
         }
-        if self.cursor < self.scroll {
-            self.scroll = self.cursor;
-        } else if self.cursor >= self.scroll + self.viewport_height {
-            self.scroll = self.cursor + 1 - self.viewport_height;
+        if pane.cursor < pane.scroll {
+            pane.scroll = pane.cursor;
+        } else if pane.cursor >= pane.scroll + viewport {
+            pane.scroll = pane.cursor + 1 - viewport;
         }
-        self.scroll = self.scroll.min(len.saturating_sub(self.viewport_height));
+        pane.scroll = pane.scroll.min(len.saturating_sub(viewport));
     }
 }
 
