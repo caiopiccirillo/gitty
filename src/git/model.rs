@@ -99,14 +99,14 @@ pub(super) fn reversed(file: &FileDiff) -> FileDiff {
             lines: h
                 .lines
                 .iter()
-                .map(|(kind, content)| (flip(kind), content.clone()))
+                .map(|(kind, content)| (flip(*kind), content.clone()))
                 .collect(),
         })
         .collect();
     reversed
 }
 
-fn flip(kind: &DiffLineKind) -> DiffLineKind {
+fn flip(kind: DiffLineKind) -> DiffLineKind {
     match kind {
         DiffLineKind::Context => DiffLineKind::Context,
         DiffLineKind::Add => DiffLineKind::Remove,

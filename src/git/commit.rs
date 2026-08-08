@@ -12,6 +12,9 @@ use super::staging::owned_index;
 
 /// Commit the index on top of HEAD (or as the root commit on an unborn
 /// branch) with the user's configured identity. Returns the short id.
+///
+/// # Errors
+/// Returns an error if the repository cannot be opened, the git identity is not configured, or the commit cannot be written.
 pub fn commit(path: &Path, message: &str) -> Result<String> {
     let repo = open_repo(path)?;
     let index = owned_index(&repo)?;
@@ -24,11 +27,13 @@ pub fn commit(path: &Path, message: &str) -> Result<String> {
         Err(_) if repo.head().is_ok_and(|head| head.is_unborn()) => Vec::new(),
         Err(err) => return Err(err.into()),
     };
-    let reference = repo.head_name()?.unwrap_or_else(|| {
-        gix::refs::FullName::try_from("HEAD").expect("HEAD is a valid ref name")
-    });
+    let reference = match repo.head_name()? {
+        Some(name) => name,
+        None => gix::refs::FullName::try_from("HEAD")?,
+    };
     let id = repo.commit_as(sig, sig, reference, message, tree, parents)?;
-    Ok(id.to_string()[..7].to_string())
+    let id = id.to_string();
+    Ok(id.get(..7).unwrap_or(&id).to_string())
 }
 
 /// Write the index as a tree object and return its id.

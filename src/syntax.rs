@@ -9,6 +9,7 @@ use ratatui::style::Color;
 use tree_sitter::{Language, Parser};
 
 /// The tree-sitter language for a file path, by extension.
+#[must_use]
 pub fn language_of(path: &str) -> Option<Language> {
     let ext = path.rsplit('.').next()?;
     match ext {
@@ -21,9 +22,10 @@ pub fn language_of(path: &str) -> Option<Language> {
 
 /// Colored token ranges of one line, as `(start, end)` byte offsets into
 /// `line` (which must be the text actually rendered).
-pub fn highlight(language: Language, line: &str) -> Vec<(usize, usize, Color)> {
+#[must_use]
+pub fn highlight(language: &Language, line: &str) -> Vec<(usize, usize, Color)> {
     let mut parser = Parser::new();
-    if parser.set_language(&language).is_err() {
+    if parser.set_language(language).is_err() {
         return Vec::new();
     }
     let Some(tree) = parser.parse(line.as_bytes(), None) else {
@@ -103,7 +105,7 @@ mod tests {
     fn highlights_keywords_and_numbers_in_rust() {
         let language = language_of("main.rs").unwrap();
         let line = "let x = 5;";
-        let tokens = highlight(language, line);
+        let tokens = highlight(&language, line);
         assert!(tokens.iter().any(|(_, _, c)| *c == Color::Cyan), "let");
         assert!(tokens.iter().any(|(_, _, c)| *c == Color::Magenta), "5");
         assert!(
@@ -117,7 +119,7 @@ mod tests {
     #[test]
     fn highlights_comments_and_strings_in_python() {
         let language = language_of("app.py").unwrap();
-        let tokens = highlight(language, "x = 'hi'  # TODO: fix");
+        let tokens = highlight(&language, "x = 'hi'  # TODO: fix");
         assert!(
             tokens.iter().any(|(_, _, c)| *c == Color::DarkGray),
             "comment"
@@ -128,7 +130,7 @@ mod tests {
     #[test]
     fn json_keys_and_strings_are_highlighted() {
         let language = language_of("data.json").unwrap();
-        let tokens = highlight(language, r#"{"name": "gitty"}"#);
+        let tokens = highlight(&language, r#"{"name": "gitty"}"#);
         assert!(
             tokens.iter().any(|(_, _, c)| *c == Color::Yellow),
             "string values"

@@ -7,6 +7,10 @@
 //! Two sources feed the tree: a single side's file list (classic layout)
 //! and the merge of both sides (split layout), where every row knows which
 //! side(s) it has changes on.
+//!
+//! The collapsed set is always the app's default-hasher `HashSet`; a
+//! hasher-generic signature would only add noise for an internal type.
+#![allow(clippy::implicit_hasher)]
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -196,7 +200,7 @@ mod tests {
         rows.iter()
             .filter_map(|n| match n {
                 Node::Dir { path, .. } => Some(path.as_str()),
-                _ => None,
+                Node::File { .. } => None,
             })
             .collect()
     }
@@ -227,11 +231,11 @@ mod tests {
         // Recursive file counts on directory rows.
         match &rows[0] {
             Node::Dir { file_count, .. } => assert_eq!(*file_count, 3),
-            _ => panic!(),
+            Node::File { .. } => panic!(),
         }
         match &rows[1] {
             Node::Dir { file_count, .. } => assert_eq!(*file_count, 2),
-            _ => panic!(),
+            Node::File { .. } => panic!(),
         }
     }
 
@@ -254,7 +258,7 @@ mod tests {
                 assert!(collapsed);
                 assert_eq!(*file_count, 3);
             }
-            _ => panic!(),
+            Node::File { .. } => panic!(),
         }
     }
 

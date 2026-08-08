@@ -127,6 +127,9 @@ pub struct App {
 impl App {
     /// Load both diffs of the repository containing `repo_path` and spawn
     /// the background refresh worker.
+    ///
+    /// # Errors
+    /// Returns an error if no git repository is found at or above `repo_path`.
     pub fn load(repo_path: &Path) -> Result<Self> {
         let mut app = Self::new(
             git::load_unstaged_diff(repo_path)?,
@@ -612,6 +615,9 @@ impl App {
 
     /// Reload both diffs from disk (synchronously, after a mutation) and
     /// invalidate any background snapshot still in flight.
+    ///
+    /// # Errors
+    /// Returns an error if a diff cannot be computed.
     pub fn refresh(&mut self) -> Result<()> {
         self.epoch.fetch_add(1, Ordering::SeqCst);
         let unstaged = git::load_unstaged_diff(&self.repo_path)?;
@@ -932,8 +938,8 @@ mod tests {
         app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
     }
 
-    fn hunk(file_idx: usize, hunk_idx: usize) -> Option<HunkId> {
-        Some(HunkId { file_idx, hunk_idx })
+    fn hunk(file_idx: usize, hunk_idx: usize) -> HunkId {
+        HunkId { file_idx, hunk_idx }
     }
 
     #[test]
@@ -984,9 +990,9 @@ mod tests {
         let mut app = test_app();
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Enter);
-        assert_eq!(app.current_hunk(), hunk(1, 0));
+        assert_eq!(app.current_hunk(), Some(hunk(1, 0)));
         press(&mut app, KeyCode::Char('n'));
-        assert_eq!(app.current_hunk(), hunk(1, 1));
+        assert_eq!(app.current_hunk(), Some(hunk(1, 1)));
     }
 
     #[test]

@@ -19,6 +19,9 @@ use super::splice::{self, Selection};
 
 /// Stage a single hunk of the unstaged diff by rebuilding the hunk's region
 /// of the index blob from the workdir side.
+///
+/// # Errors
+/// Returns an error if the repository cannot be opened, the diff cannot be computed, or the index cannot be written.
 pub fn stage_hunk(path: &Path, file_idx: usize, hunk_idx: usize) -> Result<()> {
     let repo = open_repo(path)?;
     let file = &workdir_diff(&repo)?[file_idx];
@@ -38,6 +41,9 @@ pub fn stage_hunk(path: &Path, file_idx: usize, hunk_idx: usize) -> Result<()> {
 
 /// Unstage a single hunk of the staged diff by applying the matching hunk of
 /// the *reverse* diff (index vs. HEAD) to the index.
+///
+/// # Errors
+/// Returns an error if the repository cannot be opened, the diff cannot be computed, or the index cannot be written.
 pub fn unstage_hunk(path: &Path, file_idx: usize, hunk_idx: usize) -> Result<()> {
     let repo = open_repo(path)?;
     let file = &reversed(&staged_diff(&repo)?[file_idx]);
@@ -56,6 +62,9 @@ pub fn unstage_hunk(path: &Path, file_idx: usize, hunk_idx: usize) -> Result<()>
 
 /// Stage only the selected changed lines of a hunk (unselected `+` lines are
 /// dropped, unselected `-` lines stay as context).
+///
+/// # Errors
+/// Returns an error if the repository cannot be opened, the diff cannot be computed, or the index cannot be written.
 pub fn stage_lines(
     path: &Path,
     file_idx: usize,
@@ -80,6 +89,9 @@ pub fn stage_lines(
 
 /// Unstage only the selected changed lines of a staged hunk. The reverse
 /// diff swaps the roles of `+` and `-`, so the selection is swapped too.
+///
+/// # Errors
+/// Returns an error if the repository cannot be opened, the diff cannot be computed, or the index cannot be written.
 pub fn unstage_lines(
     path: &Path,
     file_idx: usize,
@@ -107,6 +119,9 @@ pub fn unstage_lines(
 
 /// Discard a single hunk of the unstaged diff: the worktree region reverts
 /// to the index version (like `git restore` for that hunk).
+///
+/// # Errors
+/// Returns an error if the repository cannot be opened, the diff cannot be computed, or the index cannot be written.
 pub fn discard_hunk(path: &Path, file_idx: usize, hunk_idx: usize) -> Result<()> {
     let repo = open_repo(path)?;
     let fd = &workdir_diff(&repo)?[file_idx];
@@ -125,6 +140,9 @@ pub fn discard_hunk(path: &Path, file_idx: usize, hunk_idx: usize) -> Result<()>
 
 /// Discard only the selected changed lines of an unstaged hunk: selected
 /// additions disappear from the worktree, selected deletions are restored.
+///
+/// # Errors
+/// Returns an error if the repository cannot be opened, the diff cannot be computed, or the index cannot be written.
 pub fn discard_lines(
     path: &Path,
     file_idx: usize,
@@ -148,6 +166,9 @@ pub fn discard_lines(
 
 /// Discard a whole file of the unstaged diff: the worktree file reverts to
 /// the index version, or is deleted if it was untracked.
+///
+/// # Errors
+/// Returns an error if the repository cannot be opened or the index cannot be written.
 pub fn discard_file(path: &Path, file: &FileInfo) -> Result<()> {
     let repo = open_repo(path)?;
     let files = workdir_diff(&repo)?;
@@ -164,6 +185,9 @@ pub fn discard_file(path: &Path, file: &FileInfo) -> Result<()> {
 
 /// Discard a single hunk of the staged diff: both the worktree and the index
 /// region revert to HEAD (like `git checkout HEAD --` for that hunk).
+///
+/// # Errors
+/// Returns an error if the repository cannot be opened, the diff cannot be computed, or the index cannot be written.
 pub fn discard_staged_hunk(path: &Path, file_idx: usize, hunk_idx: usize) -> Result<()> {
     let repo = open_repo(path)?;
     let fd = &staged_diff(&repo)?[file_idx];
@@ -192,6 +216,9 @@ pub fn discard_staged_hunk(path: &Path, file_idx: usize, hunk_idx: usize) -> Res
 
 /// Discard only the selected changed lines of a staged hunk. The reverse
 /// diff swaps the roles of `+` and `-`, so the selection is swapped too.
+///
+/// # Errors
+/// Returns an error if the repository cannot be opened, the diff cannot be computed, or the index cannot be written.
 pub fn discard_staged_lines(
     path: &Path,
     file_idx: usize,
@@ -229,6 +256,9 @@ pub fn discard_staged_lines(
 /// Discard a whole file of the staged diff: the index entry reverts to HEAD
 /// (or is dropped) and the worktree file is rewritten to HEAD's version (or
 /// deleted).
+///
+/// # Errors
+/// Returns an error if the repository cannot be opened or the index cannot be written.
 pub fn discard_staged_file(path: &Path, file: &FileInfo) -> Result<()> {
     let repo = open_repo(path)?;
     let files = staged_diff(&repo)?;
@@ -373,6 +403,9 @@ pub(super) fn owned_index(repo: &gix::Repository) -> Result<gix::index::File> {
 
 /// Stage a whole file (like `git add <path>`). A deleted file is staged by
 /// removing it from the index.
+///
+/// # Errors
+/// Returns an error if the repository cannot be opened or the index cannot be written.
 pub fn stage_file(path: &Path, file: &FileInfo) -> Result<()> {
     let repo = open_repo(path)?;
     let workdir = repo.workdir().context("repository has no worktree")?;
@@ -406,6 +439,9 @@ pub fn stage_file(path: &Path, file: &FileInfo) -> Result<()> {
 /// Unstage a whole file (like `git reset HEAD -- <path>`). On an unborn
 /// branch there is no HEAD entry to restore, so the index entry is
 /// dropped and the file becomes untracked again.
+///
+/// # Errors
+/// Returns an error if the repository cannot be opened or the index cannot be written.
 pub fn unstage_file(path: &Path, file: &FileInfo) -> Result<()> {
     let repo = open_repo(path)?;
     let mut index = owned_index(&repo)?;

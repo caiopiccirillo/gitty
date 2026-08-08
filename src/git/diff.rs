@@ -21,12 +21,18 @@ use super::render::diff_to_view;
 
 /// Load the unstaged diff (workdir vs. index, like `git diff`) for the
 /// repository containing `path`. Untracked files are included.
+///
+/// # Errors
+/// Returns an error if no git repository is found at or above `path`.
 pub fn load_unstaged_diff(path: &Path) -> Result<DiffView> {
     let repo = open_repo(path)?;
     Ok(diff_to_view(&workdir_diff(&repo)?))
 }
 
 /// Load the staged diff (index vs. HEAD, like `git diff --cached`).
+///
+/// # Errors
+/// Returns an error if no git repository is found at or above `path`.
 pub fn load_staged_diff(path: &Path) -> Result<DiffView> {
     let repo = open_repo(path)?;
     Ok(diff_to_view(&staged_diff(&repo)?))

@@ -106,7 +106,7 @@ fn render_commit_box(frame: &mut Frame, input: &CommitInput) {
     let start = (cursor + 1).saturating_sub(visible);
     let text: String = chars.iter().skip(start).take(visible).collect();
     frame.render_widget(Paragraph::new(text), inner);
-    frame.set_cursor_position((inner.x + (cursor - start) as u16, inner.y));
+    frame.set_cursor_position((inner.x + u16::try_from(cursor - start).unwrap_or(u16::MAX), inner.y));
 }
 
 fn render_files(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -263,7 +263,7 @@ fn render_diff(frame: &mut Frame, app: &App, area: Rect, side: Side) {
                         // Color the code tokens, keeping the base style for
                         // everything between them.
                         let mut covered = 0;
-                        for (start, end, color) in crate::syntax::highlight(language, content) {
+                        for (start, end, color) in crate::syntax::highlight(&language, content) {
                             if start > covered {
                                 push(&content[covered..start], line_style);
                             }
@@ -473,7 +473,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|frame| render(frame, app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
-        let screen = buffer.content().iter().map(|cell| cell.symbol()).collect();
+        let screen = buffer.content().iter().map(ratatui::buffer::Cell::symbol).collect();
         (screen, buffer)
     }
 

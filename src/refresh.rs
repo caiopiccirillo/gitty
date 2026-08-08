@@ -6,7 +6,7 @@
 //! mutation epoch they were started at, so the app can discard results
 //! that went stale while the user was staging.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -32,17 +32,17 @@ pub struct RefreshOutcome {
 /// whenever the diffs change; the worker exits once the app is dropped.
 pub fn spawn(repo_path: PathBuf, epoch: Arc<AtomicU64>) -> Receiver<RefreshOutcome> {
     let (tx, rx) = mpsc::channel();
-    thread::spawn(move || work_loop(repo_path, epoch, tx));
+    thread::spawn(move || work_loop(&repo_path, &epoch, &tx));
     rx
 }
 
-fn work_loop(repo_path: PathBuf, epoch: Arc<AtomicU64>, tx: Sender<RefreshOutcome>) {
+fn work_loop(repo_path: &Path, epoch: &AtomicU64, tx: &Sender<RefreshOutcome>) {
     let mut last: Option<(DiffView, DiffView)> = None;
     loop {
         let started_at = epoch.load(Ordering::SeqCst);
         // On error (repo briefly locked, mid-operation) the next tick
         // retries; `last` is kept so recovery sends the new state.
-        if let Ok((unstaged, staged)) = load(&repo_path) {
+        if let Ok((unstaged, staged)) = load(repo_path) {
             let changed = match &last {
                 Some((u, s)) => *u != unstaged || *s != staged,
                 None => true,

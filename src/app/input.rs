@@ -1,4 +1,8 @@
 //! Key and mouse handling and cursor/selection movement for [`App`].
+//!
+//! Cursor math moves bounded counts (viewport height, list lengths) through
+//! `isize` so deltas can be negative; none can overflow in practice.
+#![allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
 
 use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,

@@ -159,8 +159,8 @@ fn esc_cancels_the_commit() {
 
 #[test]
 fn empty_message_is_rejected() {
-    let (dir, _repo) = init_with_identity();
-    commit_file(&_repo, dir.path(), "f.txt", BASE);
+    let (dir, repo) = init_with_identity();
+    commit_file(&repo, dir.path(), "f.txt", BASE);
     fs::write(dir.path().join("f.txt"), BASE.replacen("l1", "L1", 1)).unwrap();
     let mut app = App::load(dir.path()).unwrap();
 
