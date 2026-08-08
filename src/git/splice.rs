@@ -43,7 +43,9 @@ pub fn hunk(
         .map_err(|_| anyhow!("hunk start too large"))?
         .saturating_sub(1);
     let end = start
-        .checked_add(usize::try_from(hunk_header.before_hunk_len).map_err(|_| anyhow!("hunk too large"))?)
+        .checked_add(
+            usize::try_from(hunk_header.before_hunk_len).map_err(|_| anyhow!("hunk too large"))?,
+        )
         .ok_or_else(|| anyhow!("hunk too large"))?;
     if end > old_lines.len() {
         bail!(
@@ -102,7 +104,10 @@ pub fn hunk(
 
 /// Split `content` into lines without trailing newline separators.
 fn split_lines(content: &[u8]) -> Vec<&[u8]> {
-    content.split_inclusive(|&b| b == b'\n').map(strip_newline).collect()
+    content
+        .split_inclusive(|&b| b == b'\n')
+        .map(strip_newline)
+        .collect()
 }
 
 /// Join `lines` (without terminators), adding a final newline only if
@@ -197,7 +202,10 @@ mod tests {
             false,
             true,
             &header(1, 0, 1, 2),
-            &[line(DiffLineKind::Add, "one"), line(DiffLineKind::Add, "two")],
+            &[
+                line(DiffLineKind::Add, "one"),
+                line(DiffLineKind::Add, "two"),
+            ],
             &all(),
         )
         .unwrap();
@@ -212,7 +220,10 @@ mod tests {
             true,
             false,
             &header(1, 2, 1, 0),
-            &[line(DiffLineKind::Remove, "one"), line(DiffLineKind::Remove, "two")],
+            &[
+                line(DiffLineKind::Remove, "one"),
+                line(DiffLineKind::Remove, "two"),
+            ],
             &all(),
         )
         .unwrap();
@@ -276,7 +287,11 @@ mod tests {
             true,
             true,
             &header(5, 1, 5, 1),
-            &[line(DiffLineKind::Context, "a"), line(DiffLineKind::Remove, "x"), line(DiffLineKind::Add, "y")],
+            &[
+                line(DiffLineKind::Context, "a"),
+                line(DiffLineKind::Remove, "x"),
+                line(DiffLineKind::Add, "y"),
+            ],
             &all(),
         );
         assert!(err.is_err());

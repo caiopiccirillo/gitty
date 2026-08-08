@@ -77,7 +77,11 @@ fn commits_nested_directories_in_git_order() {
         .tree()
         .unwrap();
     let names: Vec<String> = tree.iter().map(|e| e.name().unwrap().to_string()).collect();
-    assert_eq!(names, ["a.txt", "d", "x.txt"], "entries are sorted like git");
+    assert_eq!(
+        names,
+        ["a.txt", "d", "x.txt"],
+        "entries are sorted like git"
+    );
     let d = tree
         .get_name("d")
         .unwrap()

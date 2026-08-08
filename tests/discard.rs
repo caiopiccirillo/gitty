@@ -105,7 +105,12 @@ fn discard_deletes_an_untracked_file() {
     fs::write(dir.path().join("new.txt"), "brand\nnew\n").unwrap();
 
     let view = load_unstaged_diff(dir.path()).unwrap();
-    let file = view.files.iter().find(|f| f.path == "new.txt").unwrap().clone();
+    let file = view
+        .files
+        .iter()
+        .find(|f| f.path == "new.txt")
+        .unwrap()
+        .clone();
     discard_file(dir.path(), &file).unwrap();
 
     assert!(!dir.path().join("new.txt").exists());

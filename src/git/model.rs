@@ -227,7 +227,11 @@ mod tests {
         let kinds: Vec<DiffLineKind> = h.lines.iter().map(|(k, _)| *k).collect();
         assert_eq!(
             kinds,
-            vec![DiffLineKind::Context, DiffLineKind::Add, DiffLineKind::Remove]
+            vec![
+                DiffLineKind::Context,
+                DiffLineKind::Add,
+                DiffLineKind::Remove
+            ]
         );
         assert_eq!(h.lines[1].1, b"old\n");
         assert_eq!(h.lines[2].1, b"new\n");

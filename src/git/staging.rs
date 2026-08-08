@@ -395,7 +395,11 @@ pub fn stage_file(path: &Path, file: &FileInfo) -> Result<()> {
             let (content, is_symlink) = if full.is_symlink() {
                 (gix::path::into_bstr(full.read_link()?).to_vec(), true)
             } else {
-                (std::fs::read(&full).with_context(|| format!("cannot read {}", full.display()))?, false)
+                (
+                    std::fs::read(&full)
+                        .with_context(|| format!("cannot read {}", full.display()))?,
+                    false,
+                )
             };
             let id = repo.write_blob(&content)?.detach();
             let metadata = gix::index::fs::Metadata::from_path_no_follow(&full)?;

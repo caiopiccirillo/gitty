@@ -110,12 +110,9 @@ fn binary_files_show_a_placeholder_line() {
 
     let view = load_unstaged_diff(dir.path()).unwrap();
     assert_eq!(view.files.len(), 1);
-    assert!(
-        view.lines.iter().any(|l| {
-            l.kind == LineKind::Meta
-                && l.content == "Binary files a/bin.dat and b/bin.dat differ"
-        })
-    );
+    assert!(view.lines.iter().any(|l| {
+        l.kind == LineKind::Meta && l.content == "Binary files a/bin.dat and b/bin.dat differ"
+    }));
     assert!(view.hunks().is_empty(), "binary files have no hunks");
 }
 
@@ -128,7 +125,9 @@ fn mode_only_change_shows_mode_lines() {
     let repo = Repository::init(dir.path()).unwrap();
     commit_file(&repo, dir.path(), "f.txt", BASE);
 
-    let mut perms = fs::metadata(dir.path().join("f.txt")).unwrap().permissions();
+    let mut perms = fs::metadata(dir.path().join("f.txt"))
+        .unwrap()
+        .permissions();
     perms.set_mode(0o755);
     fs::set_permissions(dir.path().join("f.txt"), perms).unwrap();
 

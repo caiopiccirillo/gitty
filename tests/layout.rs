@@ -54,7 +54,11 @@ fn split_mode_stages_from_the_unstaged_pane_and_unstages_from_the_staged_pane() 
     // hunk, and u unstages it from there.
     press(&mut app, KeyCode::Tab);
     assert_eq!(app.side, Side::Staged);
-    assert!(app.display_lines_for(Side::Staged).iter().any(|l| l.content == "L1"));
+    assert!(
+        app.display_lines_for(Side::Staged)
+            .iter()
+            .any(|l| l.content == "L1")
+    );
     press(&mut app, KeyCode::Char('u'));
     assert_eq!(app.message, None);
     assert!(load_staged_diff(dir.path()).unwrap().files.is_empty());
@@ -84,7 +88,11 @@ fn split_mode_keeps_the_selection_when_switching_panes() {
     assert_eq!(app.cursor(), 0, "staged pane starts at its own position");
 
     press(&mut app, KeyCode::Tab);
-    assert_eq!(app.focus, Focus::Files, "Tab past the last pane returns to files");
+    assert_eq!(
+        app.focus,
+        Focus::Files,
+        "Tab past the last pane returns to files"
+    );
     assert_eq!(app.selected_row, 1);
     assert_eq!(
         app.pane_of(Side::Unstaged).cursor,
@@ -140,7 +148,11 @@ fn split_mode_tab_lands_in_the_staged_pane_after_staging() {
     press(&mut app, KeyCode::Tab);
     assert_eq!(app.focus, Focus::Diff);
     assert_eq!(app.side, Side::Staged);
-    assert!(app.display_lines_for(Side::Staged).iter().any(|l| l.content == "L1"));
+    assert!(
+        app.display_lines_for(Side::Staged)
+            .iter()
+            .any(|l| l.content == "L1")
+    );
 
     // u unstages the hunk from the staged pane.
     press(&mut app, KeyCode::Char('u'));

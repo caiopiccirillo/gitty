@@ -375,7 +375,12 @@ impl App {
         self.with_file_in(side, "unstage", git::unstage_file);
     }
 
-    fn with_file_in(&mut self, side: Side, verb: &str, op: impl FnOnce(&Path, &FileInfo) -> Result<()>) {
+    fn with_file_in(
+        &mut self,
+        side: Side,
+        verb: &str,
+        op: impl FnOnce(&Path, &FileInfo) -> Result<()>,
+    ) {
         let Some(file) = self
             .selected_file_index_in(side)
             .and_then(|i| self.diff_of(side).files.get(i))
@@ -418,7 +423,9 @@ impl App {
         op: impl Fn(&Path, &FileInfo) -> Result<()>,
     ) {
         let files = self.dir_files(side, dir);
-        self.run_op(verb, |repo_path| files.iter().try_for_each(|f| op(repo_path, f)));
+        self.run_op(verb, |repo_path| {
+            files.iter().try_for_each(|f| op(repo_path, f))
+        });
     }
 
     /// Range of display lines covered by the visual selection, if active.
@@ -513,7 +520,11 @@ impl App {
                     return;
                 };
                 match self.selected_lines() {
-                    Some((hunk, selected)) => DiscardAction::Lines { hunk, selected, side },
+                    Some((hunk, selected)) => DiscardAction::Lines {
+                        hunk,
+                        selected,
+                        side,
+                    },
                     None if self.pane().visual_anchor.is_some() => {
                         self.message = Some("no changed lines selected".into());
                         return;
@@ -538,7 +549,10 @@ impl App {
             DiscardAction::File { file, .. } => format!("file {}", file.path),
             DiscardAction::Dir { path, .. } => format!("directory {path}/"),
             DiscardAction::Files { files, .. } => {
-                let dir = files.first().and_then(|f| tree::parent_dir(&f.path)).unwrap_or("");
+                let dir = files
+                    .first()
+                    .and_then(|f| tree::parent_dir(&f.path))
+                    .unwrap_or("");
                 format!("directory {dir}/")
             }
         };
@@ -713,7 +727,11 @@ fn execute_discard(repo_path: &Path, action: DiscardAction) -> Result<()> {
                 git::discard_hunk(repo_path, hunk.file_idx, hunk.hunk_idx)?;
             }
         }
-        DiscardAction::Lines { hunk, selected, side } => {
+        DiscardAction::Lines {
+            hunk,
+            selected,
+            side,
+        } => {
             if side == Side::Staged {
                 git::discard_staged_lines(repo_path, hunk.file_idx, hunk.hunk_idx, &selected)?;
             } else {
@@ -767,16 +785,28 @@ pub struct DiscardPrompt {
 /// operations, which revert both the worktree and the index to HEAD.
 #[derive(Debug)]
 pub enum DiscardAction {
-    Hunk { hunk: HunkId, side: Side },
+    Hunk {
+        hunk: HunkId,
+        side: Side,
+    },
     Lines {
         hunk: HunkId,
         selected: SelectedLines,
         side: Side,
     },
-    File { file: FileInfo, side: Side },
-    Dir { path: String, side: Side },
+    File {
+        file: FileInfo,
+        side: Side,
+    },
+    Dir {
+        path: String,
+        side: Side,
+    },
     /// A directory resolved to its files, ready to discard.
-    Files { files: Vec<FileInfo>, side: Side },
+    Files {
+        files: Vec<FileInfo>,
+        side: Side,
+    },
 }
 
 impl CommitInput {
@@ -835,7 +865,9 @@ fn file_display_lines(diff: &DiffView, file_idx: usize) -> Vec<&DiffLine> {
 mod tests {
     use super::*;
     use crate::diff::{FileStatus, two_file_view};
-    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::crossterm::event::{
+        KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
     use ratatui::layout::Rect;
 
     /// Two files (1 hunk + 2 hunks), staged side empty.
@@ -872,11 +904,7 @@ mod tests {
 
     /// Classic app with both sides populated, switched to split mode.
     fn split_app() -> App {
-        let mut app = App::new(
-            two_file_view(),
-            staged_view(),
-            PathBuf::from("/unused"),
-        );
+        let mut app = App::new(two_file_view(), staged_view(), PathBuf::from("/unused"));
         app.set_viewport_height(10);
         app.toggle_mode();
         app
@@ -1140,7 +1168,11 @@ mod tests {
         let mut app = test_app(); // staged side is empty
         press(&mut app, KeyCode::Char('m'));
         press(&mut app, KeyCode::Tab);
-        assert_eq!(app.side, Side::Unstaged, "cannot focus the hidden staged pane");
+        assert_eq!(
+            app.side,
+            Side::Unstaged,
+            "cannot focus the hidden staged pane"
+        );
         press(&mut app, KeyCode::Char('m'));
         assert_eq!(app.mode, Mode::Classic);
     }

@@ -9,9 +9,9 @@ use gix::diff::blob::unified_diff::{ConsumeHunk, ContextSize, DiffLineKind};
 use gix::diff::blob::{ResourceKind, platform};
 use gix::index::entry::Mode;
 use gix::object::tree::EntryKind;
+use gix::status::plumbing::index_as_worktree::{Change, EntryStatus};
 use gix::status::tree_index::TrackRenames;
 use gix::status::{UntrackedFiles, index_worktree};
-use gix::status::plumbing::index_as_worktree::{Change, EntryStatus};
 
 use crate::diff::{DiffView, FileStatus};
 
@@ -57,19 +57,48 @@ pub(super) fn workdir_diff(repo: &gix::Repository) -> Result<Vec<FileDiff>> {
     for item in iter {
         let item = item?;
         match item {
-            index_worktree::Item::Modification { entry, rela_path, status, .. } => {
+            index_worktree::Item::Modification {
+                entry,
+                rela_path,
+                status,
+                ..
+            } => {
                 let path = rela_path.to_str_lossy().into_owned();
                 match status {
                     EntryStatus::Change(Change::Removed) => {
-                        files.push(diff_worktree(repo, &mut cache, &path, Some(entry.id), Some(entry.mode), None, FileStatus::Deleted)?);
+                        files.push(diff_worktree(
+                            repo,
+                            &mut cache,
+                            &path,
+                            Some(entry.id),
+                            Some(entry.mode),
+                            None,
+                            FileStatus::Deleted,
+                        )?);
                     }
                     EntryStatus::Change(Change::Type { worktree_mode }) => {
-                        files.push(diff_worktree(repo, &mut cache, &path, Some(entry.id), Some(entry.mode), Some(worktree_mode), FileStatus::TypeChange)?);
+                        files.push(diff_worktree(
+                            repo,
+                            &mut cache,
+                            &path,
+                            Some(entry.id),
+                            Some(entry.mode),
+                            Some(worktree_mode),
+                            FileStatus::TypeChange,
+                        )?);
                     }
                     EntryStatus::Change(
                         Change::Modification { .. } | Change::SubmoduleModification(_),
                     ) => {
-                        files.push(diff_worktree(repo, &mut cache, &path, Some(entry.id), Some(entry.mode), None, FileStatus::Modified)?);
+                        files.push(diff_worktree(
+                            repo,
+                            &mut cache,
+                            &path,
+                            Some(entry.id),
+                            Some(entry.mode),
+                            None,
+                            FileStatus::Modified,
+                        )?);
                     }
                     _ => {} // NeedsUpdate, IntentToAdd, Conflict.
                 }
@@ -81,7 +110,15 @@ pub(super) fn workdir_diff(repo: &gix::Repository) -> Result<Vec<FileDiff>> {
                     continue;
                 }
                 let path = entry.rela_path.to_str_lossy().into_owned();
-                files.push(diff_worktree(repo, &mut cache, &path, None, None, None, FileStatus::Untracked)?);
+                files.push(diff_worktree(
+                    repo,
+                    &mut cache,
+                    &path,
+                    None,
+                    None,
+                    None,
+                    FileStatus::Untracked,
+                )?);
             }
             _ => {}
         }
@@ -105,20 +142,42 @@ pub(super) fn staged_diff(repo: &gix::Repository) -> Result<Vec<FileDiff>> {
         |change, _tree_index, _index| {
             use gix::diff::index::ChangeRef;
             let file = match change {
-                ChangeRef::Addition { location, entry_mode, id, .. } => {
+                ChangeRef::Addition {
+                    location,
+                    entry_mode,
+                    id,
+                    ..
+                } => {
                     if entry_mode.is_submodule() {
                         return Ok(std::ops::ControlFlow::Continue(()));
                     }
                     Some(diff_blobs(
-                        repo, &mut cache, location.as_ref(), None, None, Some(id.into_owned()), Some(entry_mode),
+                        repo,
+                        &mut cache,
+                        location.as_ref(),
+                        None,
+                        None,
+                        Some(id.into_owned()),
+                        Some(entry_mode),
                     )?)
                 }
-                ChangeRef::Deletion { location, entry_mode, id, .. } => {
+                ChangeRef::Deletion {
+                    location,
+                    entry_mode,
+                    id,
+                    ..
+                } => {
                     if entry_mode.is_submodule() {
                         return Ok(std::ops::ControlFlow::Continue(()));
                     }
                     Some(diff_blobs(
-                        repo, &mut cache, location.as_ref(), Some(id.into_owned()), Some(entry_mode), None, None,
+                        repo,
+                        &mut cache,
+                        location.as_ref(),
+                        Some(id.into_owned()),
+                        Some(entry_mode),
+                        None,
+                        None,
                     )?)
                 }
                 ChangeRef::Modification {
@@ -164,8 +223,22 @@ fn diff_blobs(
     new_id: Option<gix::ObjectId>,
     new_mode: Option<Mode>,
 ) -> Result<FileDiff> {
-    set_resource(repo, cache, path, old_id, old_mode, ResourceKind::OldOrSource)?;
-    set_resource(repo, cache, path, new_id, new_mode, ResourceKind::NewOrDestination)?;
+    set_resource(
+        repo,
+        cache,
+        path,
+        old_id,
+        old_mode,
+        ResourceKind::OldOrSource,
+    )?;
+    set_resource(
+        repo,
+        cache,
+        path,
+        new_id,
+        new_mode,
+        ResourceKind::NewOrDestination,
+    )?;
     let mut file = FileDiff::new(path, old_id, old_mode, new_id, new_mode);
     collect_diff(cache, &mut file)?;
     Ok(file)
@@ -184,12 +257,26 @@ fn diff_worktree(
     status: FileStatus,
 ) -> Result<FileDiff> {
     let path = BString::from(path);
-    set_resource(repo, cache, path.as_bstr(), old_id, old_mode, ResourceKind::OldOrSource)?;
+    set_resource(
+        repo,
+        cache,
+        path.as_bstr(),
+        old_id,
+        old_mode,
+        ResourceKind::OldOrSource,
+    )?;
     // The new side is read from the worktree; its kind is only used to tell
     // symlinks apart from regular files.
     let fs_mode = worktree_mode_of(repo, path.as_bstr());
     let new_kind_mode = new_mode.or(fs_mode).unwrap_or(Mode::FILE);
-    set_resource(repo, cache, path.as_bstr(), None, Some(new_kind_mode), ResourceKind::NewOrDestination)?;
+    set_resource(
+        repo,
+        cache,
+        path.as_bstr(),
+        None,
+        Some(new_kind_mode),
+        ResourceKind::NewOrDestination,
+    )?;
     let mut file = FileDiff::new(path.as_bstr(), old_id, old_mode, None, new_mode.or(fs_mode));
     file.status = status;
     collect_diff(cache, &mut file)?;
@@ -258,10 +345,17 @@ struct HunkCollector {
 impl ConsumeHunk for HunkCollector {
     type Out = Self;
 
-    fn consume_hunk(&mut self, header: gix::diff::blob::unified_diff::HunkHeader, lines: &[(DiffLineKind, &[u8])]) -> std::io::Result<()> {
+    fn consume_hunk(
+        &mut self,
+        header: gix::diff::blob::unified_diff::HunkHeader,
+        lines: &[(DiffLineKind, &[u8])],
+    ) -> std::io::Result<()> {
         self.hunks.push(Hunk {
             header,
-            lines: lines.iter().map(|(kind, content)| (*kind, content.to_vec())).collect(),
+            lines: lines
+                .iter()
+                .map(|(kind, content)| (*kind, content.to_vec()))
+                .collect(),
         });
         Ok(())
     }

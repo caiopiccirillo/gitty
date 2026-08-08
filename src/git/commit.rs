@@ -33,7 +33,10 @@ pub fn commit(path: &Path, message: &str) -> Result<String> {
 
 /// Write the index as a tree object and return its id.
 fn index_to_tree(repo: &gix::Repository, index: &gix::index::State) -> Result<gix::ObjectId> {
-    fn build_tree(repo: &gix::Repository, paths: &[(&[u8], gix::ObjectId, Mode)]) -> Result<gix::ObjectId> {
+    fn build_tree(
+        repo: &gix::Repository,
+        paths: &[(&[u8], gix::ObjectId, Mode)],
+    ) -> Result<gix::ObjectId> {
         type DirGroup<'a> = (&'a [u8], Vec<(&'a [u8], gix::ObjectId, Mode)>);
         let mut files = Vec::new();
         let mut dirs: Vec<DirGroup<'_>> = Vec::new();
@@ -54,9 +57,12 @@ fn index_to_tree(repo: &gix::Repository, index: &gix::index::State) -> Result<gi
         let mut entries = Vec::new();
         for (name, id, mode) in files {
             entries.push(gix::objs::tree::Entry {
-                mode: mode
-                    .to_tree_entry_mode()
-                    .with_context(|| format!("unsupported index mode for {}", String::from_utf8_lossy(name)))?,
+                mode: mode.to_tree_entry_mode().with_context(|| {
+                    format!(
+                        "unsupported index mode for {}",
+                        String::from_utf8_lossy(name)
+                    )
+                })?,
                 filename: BString::from(name),
                 oid: id,
             });

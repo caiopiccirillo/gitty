@@ -92,10 +92,7 @@ fn hunk_header_line(hunk: &Hunk) -> String {
 /// The section heading of a hunk: the first context line, as `git` derives
 /// it (skipping empty, whitespace-led or comment lines, capped at 80 bytes).
 fn section_of(line: &BStr) -> Option<String> {
-    if line.is_empty()
-        || line[0].is_ascii_whitespace()
-        || line[0] == b'#'
-    {
+    if line.is_empty() || line[0].is_ascii_whitespace() || line[0] == b'#' {
         return None;
     }
     let mut section = String::from_utf8_lossy(&line[..line.len().min(80)]).into_owned();
@@ -120,8 +117,14 @@ fn file_headers(file: &FileDiff) -> Vec<String> {
     let old_mode = file.old_mode.map(mode_octal);
     let new_mode = file.new_mode.map(mode_octal);
     match file.status {
-        FileStatus::Added => headers.push(format!("new file mode {}", new_mode.clone().unwrap_or_default())),
-        FileStatus::Deleted => headers.push(format!("deleted file mode {}", old_mode.clone().unwrap_or_default())),
+        FileStatus::Added => headers.push(format!(
+            "new file mode {}",
+            new_mode.clone().unwrap_or_default()
+        )),
+        FileStatus::Deleted => headers.push(format!(
+            "deleted file mode {}",
+            old_mode.clone().unwrap_or_default()
+        )),
         _ if old_mode.is_some() && old_mode != new_mode => {
             headers.push(format!("old mode {}", old_mode.clone().unwrap_or_default()));
             headers.push(format!("new mode {}", new_mode.clone().unwrap_or_default()));
@@ -135,7 +138,12 @@ fn file_headers(file: &FileDiff) -> Vec<String> {
                 .flatten()
                 .map(|m| format!(" {m}"))
                 .unwrap_or_default();
-            headers.push(format!("index {}..{}{}", short_id(old), short_id(new), mode));
+            headers.push(format!(
+                "index {}..{}{}",
+                short_id(old),
+                short_id(new),
+                mode
+            ));
         }
         (Some(old), None) => headers.push(format!("index {}..{}", short_id(old), zeros(old))),
         (None, Some(new)) => headers.push(format!("index {}..{}", zeros(new), short_id(new))),
@@ -206,7 +214,10 @@ mod tests {
 
     #[test]
     fn derives_section_headings_like_git() {
-        assert_eq!(section_of(BStr::new(b"fn main()")), Some("fn main()".into()));
+        assert_eq!(
+            section_of(BStr::new(b"fn main()")),
+            Some("fn main()".into())
+        );
         assert_eq!(section_of(BStr::new(b"")), None);
         assert_eq!(section_of(BStr::new(b"  indented")), None);
         assert_eq!(section_of(BStr::new(b"# comment")), None);
@@ -225,13 +236,22 @@ mod tests {
         );
         assert_eq!(hunk_header_line(&with_section), "@@ -1,3 +2,4 @@ fn main()");
 
-        let without_section = hunk(header(1, 3, 2, 4), vec![(DiffLineKind::Remove, b"old".to_vec())]);
+        let without_section = hunk(
+            header(1, 3, 2, 4),
+            vec![(DiffLineKind::Remove, b"old".to_vec())],
+        );
         assert_eq!(hunk_header_line(&without_section), "@@ -1,3 +2,4 @@");
     }
 
     #[test]
     fn headers_for_an_added_file() {
-        let file = FileDiff::new(BStr::new(b"new.txt"), None, None, Some(oid("abcdef1")), Some(Mode::FILE));
+        let file = FileDiff::new(
+            BStr::new(b"new.txt"),
+            None,
+            None,
+            Some(oid("abcdef1")),
+            Some(Mode::FILE),
+        );
         assert_eq!(
             file_headers(&file),
             vec![
@@ -246,7 +266,13 @@ mod tests {
 
     #[test]
     fn headers_for_a_deleted_file() {
-        let file = FileDiff::new(BStr::new(b"old.txt"), Some(oid("deadbee")), Some(Mode::FILE), None, None);
+        let file = FileDiff::new(
+            BStr::new(b"old.txt"),
+            Some(oid("deadbee")),
+            Some(Mode::FILE),
+            None,
+            None,
+        );
         assert_eq!(
             file_headers(&file),
             vec![

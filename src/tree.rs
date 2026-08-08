@@ -282,9 +282,21 @@ mod tests {
         assert_eq!(
             entries,
             vec![
-                FileEntry { path: "a.txt".into(), staged: None, unstaged: Some(0) },
-                FileEntry { path: "b.txt".into(), staged: Some(0), unstaged: None },
-                FileEntry { path: "c.txt".into(), staged: Some(1), unstaged: Some(1) },
+                FileEntry {
+                    path: "a.txt".into(),
+                    staged: None,
+                    unstaged: Some(0)
+                },
+                FileEntry {
+                    path: "b.txt".into(),
+                    staged: Some(0),
+                    unstaged: None
+                },
+                FileEntry {
+                    path: "c.txt".into(),
+                    staged: Some(1),
+                    unstaged: Some(1)
+                },
             ]
         );
     }

@@ -80,10 +80,10 @@ fn kind_color(kind: &str) -> Option<Color> {
 /// Anonymous keyword tokens, whose kind is their source text.
 const KEYWORDS: &[&str] = &[
     "let", "if", "else", "fn", "return", "while", "for", "in", "match", "use", "mod", "impl",
-    "trait", "struct", "enum", "async", "await", "loop", "break", "continue", "move", "mut",
-    "pub", "true", "false", "self", "def", "class", "import", "from", "lambda", "pass", "elif",
-    "not", "and", "or", "is", "yield", "with", "as", "try", "except", "finally", "global",
-    "nonlocal", "del", "raise", "assert", "None", "True", "False",
+    "trait", "struct", "enum", "async", "await", "loop", "break", "continue", "move", "mut", "pub",
+    "true", "false", "self", "def", "class", "import", "from", "lambda", "pass", "elif", "not",
+    "and", "or", "is", "yield", "with", "as", "try", "except", "finally", "global", "nonlocal",
+    "del", "raise", "assert", "None", "True", "False",
 ];
 
 #[cfg(test)]
@@ -107,7 +107,9 @@ mod tests {
         assert!(tokens.iter().any(|(_, _, c)| *c == Color::Cyan), "let");
         assert!(tokens.iter().any(|(_, _, c)| *c == Color::Magenta), "5");
         assert!(
-            tokens.iter().all(|(start, end, _)| *start < *end && *end <= line.len()),
+            tokens
+                .iter()
+                .all(|(start, end, _)| *start < *end && *end <= line.len()),
             "ranges stay within the line"
         );
     }
@@ -116,7 +118,10 @@ mod tests {
     fn highlights_comments_and_strings_in_python() {
         let language = language_of("app.py").unwrap();
         let tokens = highlight(language, "x = 'hi'  # TODO: fix");
-        assert!(tokens.iter().any(|(_, _, c)| *c == Color::DarkGray), "comment");
+        assert!(
+            tokens.iter().any(|(_, _, c)| *c == Color::DarkGray),
+            "comment"
+        );
         assert!(tokens.iter().any(|(_, _, c)| *c == Color::Yellow), "string");
     }
 
@@ -124,6 +129,9 @@ mod tests {
     fn json_keys_and_strings_are_highlighted() {
         let language = language_of("data.json").unwrap();
         let tokens = highlight(language, r#"{"name": "gitty"}"#);
-        assert!(tokens.iter().any(|(_, _, c)| *c == Color::Yellow), "string values");
+        assert!(
+            tokens.iter().any(|(_, _, c)| *c == Color::Yellow),
+            "string values"
+        );
     }
 }
