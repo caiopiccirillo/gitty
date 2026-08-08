@@ -52,6 +52,7 @@ pub struct SelectedLines {
 }
 
 impl SelectedLines {
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.additions.is_empty() && self.deletions.is_empty()
     }
@@ -86,15 +87,18 @@ pub struct DiffView {
 }
 
 impl DiffView {
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.lines.is_empty()
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.lines.len()
     }
 
     /// All hunks in display order.
+    #[must_use]
     pub fn hunks(&self) -> Vec<HunkId> {
         let mut hunks = Vec::new();
         for line in &self.lines {
@@ -112,6 +116,7 @@ impl DiffView {
     }
 
     /// Range of line indices occupied by a hunk, starting at its `@@` header.
+    #[must_use]
     pub fn hunk_line_range(&self, id: HunkId) -> Option<Range<usize>> {
         let belongs =
             |line: &DiffLine| line.file_idx == id.file_idx && line.hunk_idx == Some(id.hunk_idx);
@@ -119,12 +124,12 @@ impl DiffView {
         let end = self.lines[start..]
             .iter()
             .position(|line| !belongs(line))
-            .map(|offset| start + offset)
-            .unwrap_or(self.lines.len());
+            .map_or(self.lines.len(), |offset| start + offset);
         Some(start..end)
     }
 
     /// Range of line indices occupied by a file, starting at its header.
+    #[must_use]
     pub fn file_line_range(&self, file_idx: usize) -> Option<Range<usize>> {
         if file_idx >= self.files.len() {
             return None;
@@ -133,8 +138,7 @@ impl DiffView {
         let end = self.lines[start..]
             .iter()
             .position(|l| l.file_idx != file_idx)
-            .map(|offset| start + offset)
-            .unwrap_or(self.lines.len());
+            .map_or(self.lines.len(), |offset| start + offset);
         Some(start..end)
     }
 }

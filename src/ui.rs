@@ -202,9 +202,7 @@ fn render_diff(frame: &mut Frame, app: &App, area: Rect, side: Side) {
         Mode::Classic => match app.selected_node() {
             Some(Node::File { .. }) => app
                 .selected_file_index_in(side)
-                .and_then(|idx| app.diff_of(side).files.get(idx))
-                .map(|file| format!(" {} ", file.path))
-                .unwrap_or_else(|| " diff ".into()),
+                .and_then(|idx| app.diff_of(side).files.get(idx)).map_or_else(|| " diff ".into(), |file| format!(" {} ", file.path)),
             Some(Node::Dir { path, .. }) => format!(" {path}/ "),
             None => " diff ".into(),
         },

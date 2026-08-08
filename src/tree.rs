@@ -24,6 +24,7 @@ pub struct FileEntry {
 }
 
 /// Merge both diffs' file lists by path, in path order.
+#[must_use]
 pub fn merge_files(staged: &[FileInfo], unstaged: &[FileInfo]) -> Vec<FileEntry> {
     let mut entries: Vec<FileEntry> = staged
         .iter()
@@ -66,12 +67,14 @@ pub enum Node {
 }
 
 impl Node {
+    #[must_use]
     pub fn is_dir(&self) -> bool {
         matches!(self, Node::Dir { .. })
     }
 }
 
 /// The directory portion of a path (`a/b/c.rs` -> `a/b`), `None` at the top.
+#[must_use]
 pub fn parent_dir(path: &str) -> Option<&str> {
     path.rfind('/').map(|i| &path[..i])
 }
@@ -79,6 +82,7 @@ pub fn parent_dir(path: &str) -> Option<&str> {
 /// Build the visible rows from the merged file entries, honoring collapsed
 /// directories. Directories sort before the files of their level; both
 /// alphabetically. The classic layout feeds this a single-side merge.
+#[must_use]
 pub fn visible_rows_merged(entries: &[FileEntry], collapsed: &HashSet<String>) -> Vec<Node> {
     build_rows(entries.len(), collapsed, &|i| &entries[i].path)
 }

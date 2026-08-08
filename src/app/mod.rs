@@ -39,6 +39,7 @@ pub enum Side {
 
 impl Side {
     /// Index into [`App::panes`].
+    #[must_use]
     pub fn index(self) -> usize {
         match self {
             Side::Unstaged => 0,
@@ -46,6 +47,7 @@ impl Side {
         }
     }
 
+    #[must_use]
     pub fn other(self) -> Side {
         match self {
             Side::Unstaged => Side::Staged,
@@ -138,6 +140,7 @@ impl App {
         Ok(app)
     }
 
+    #[must_use]
     pub fn new(unstaged: DiffView, staged: DiffView, repo_path: PathBuf) -> Self {
         let mut app = Self {
             unstaged,
@@ -166,10 +169,12 @@ impl App {
         app
     }
 
+    #[must_use]
     pub fn current_diff(&self) -> &DiffView {
         self.diff_of(self.side)
     }
 
+    #[must_use]
     pub fn diff_of(&self, side: Side) -> &DiffView {
         match side {
             Side::Unstaged => &self.unstaged,
@@ -178,6 +183,7 @@ impl App {
     }
 
     /// Pane state of the focused side.
+    #[must_use]
     pub fn pane(&self) -> &PaneState {
         &self.panes[self.side.index()]
     }
@@ -187,6 +193,7 @@ impl App {
     }
 
     /// Pane state of `side`, for rendering both panes in the split layout.
+    #[must_use]
     pub fn pane_of(&self, side: Side) -> &PaneState {
         &self.panes[side.index()]
     }
@@ -196,14 +203,17 @@ impl App {
     }
 
     /// Cursor of the focused pane.
+    #[must_use]
     pub fn cursor(&self) -> usize {
         self.pane().cursor
     }
 
+    #[must_use]
     pub fn scroll(&self) -> usize {
         self.pane().scroll
     }
 
+    #[must_use]
     pub fn visual_anchor(&self) -> Option<usize> {
         self.pane().visual_anchor
     }
@@ -213,12 +223,14 @@ impl App {
     /// pane title shows the path instead). For a directory: the diffs of
     /// all files beneath it, concatenated, keeping each file's header lines
     /// as separators.
+    #[must_use]
     pub fn display_lines(&self) -> Vec<&DiffLine> {
         self.display_lines_for(self.side)
     }
 
     /// Like [`display_lines`](Self::display_lines), but for a specific side
     /// (the split layout renders both).
+    #[must_use]
     pub fn display_lines_for(&self, side: Side) -> Vec<&DiffLine> {
         let diff = self.diff_of(side);
         match self.selected_node() {
@@ -240,6 +252,7 @@ impl App {
     }
 
     /// The currently selected row of the files pane tree.
+    #[must_use]
     pub fn selected_node(&self) -> Option<&Node> {
         self.tree.get(self.selected_row)
     }
@@ -248,6 +261,7 @@ impl App {
     /// has changes for it. The tree always indexes into [`App::entries`]:
     /// in the classic layout the entries are built from the focused side
     /// only, so the other side resolves to `None`.
+    #[must_use]
     pub fn selected_file_index_in(&self, side: Side) -> Option<usize> {
         let &Node::File { file_idx, .. } = self.selected_node()? else {
             return None;
@@ -325,6 +339,7 @@ impl App {
     }
 
     /// The hunk under the cursor; the target of stage/unstage.
+    #[must_use]
     pub fn current_hunk(&self) -> Option<HunkId> {
         let lines = self.display_lines();
         let line = lines.get(self.pane().cursor)?;
@@ -429,12 +444,14 @@ impl App {
     }
 
     /// Range of display lines covered by the visual selection, if active.
+    #[must_use]
     pub fn selection_range(&self) -> Option<Range<usize>> {
         self.selection_range_for(self.side)
     }
 
     /// Like [`selection_range`](Self::selection_range), but for a specific
     /// pane.
+    #[must_use]
     pub fn selection_range_for(&self, side: Side) -> Option<Range<usize>> {
         let pane = self.pane_of(side);
         let anchor = pane.visual_anchor?;
@@ -442,7 +459,7 @@ impl App {
     }
 
     /// The changed (`+`/`-`) lines covered by the visual selection, as
-    /// per-hunk ordinals consumed by git::stage_lines/unstage_lines.
+    /// per-hunk ordinals consumed by `git::stage_lines/unstage_lines`.
     fn selected_lines(&self) -> Option<(HunkId, SelectedLines)> {
         let range = self.selection_range()?;
         let anchor = self.pane().visual_anchor?;
@@ -843,6 +860,7 @@ impl CommitInput {
     }
 
     /// Cursor position in characters (for rendering).
+    #[must_use]
     pub fn cursor_chars(&self) -> usize {
         self.text[..self.cursor].chars().count()
     }

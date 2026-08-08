@@ -301,7 +301,7 @@ fn set_resource(
     kind: ResourceKind,
 ) -> Result<()> {
     let id = id.unwrap_or_else(|| gix::ObjectId::null(repo.object_hash()));
-    let entry_kind = mode.map(kind_of).unwrap_or(EntryKind::Blob);
+    let entry_kind = mode.map_or(EntryKind::Blob, kind_of);
     cache.set_resource(id, entry_kind, path, kind, &repo.objects)?;
     Ok(())
 }

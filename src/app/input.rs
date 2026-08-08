@@ -5,7 +5,7 @@ use ratatui::crossterm::event::{
 };
 use ratatui::layout::Position;
 
-use super::*;
+use super::{App, Focus, Side, Mode, Node, tree, Range, LineKind, DiffLine};
 
 impl App {
     pub fn handle_key(&mut self, key: KeyEvent) {
@@ -120,8 +120,8 @@ impl App {
     /// Keys while the discard confirmation is open.
     fn handle_discard_key(&mut self, key: KeyEvent) {
         match (key.modifiers, key.code) {
-            (_, KeyCode::Char('y') | KeyCode::Char('Y')) => self.confirm_discard(),
-            (_, KeyCode::Char('n') | KeyCode::Char('N')) | (_, KeyCode::Esc) => {
+            (_, KeyCode::Char('y' | 'Y')) => self.confirm_discard(),
+            (_, KeyCode::Char('n' | 'N') | KeyCode::Esc) => {
                 self.discard_confirm = None;
             }
             _ => {}
@@ -276,8 +276,8 @@ impl App {
 
     fn handle_diff_key(&mut self, key: KeyEvent) {
         match (key.modifiers, key.code) {
-            (_, KeyCode::Down) | (_, KeyCode::Char('j')) => self.move_cursor(1),
-            (_, KeyCode::Up) | (_, KeyCode::Char('k')) => self.move_cursor(-1),
+            (_, KeyCode::Down | KeyCode::Char('j')) => self.move_cursor(1),
+            (_, KeyCode::Up | KeyCode::Char('k')) => self.move_cursor(-1),
             (_, KeyCode::PageDown) => self.move_cursor(self.viewport_height as isize),
             (_, KeyCode::PageUp) => self.move_cursor(-(self.viewport_height as isize)),
             (KeyModifiers::CONTROL, KeyCode::Char('d')) => {
@@ -286,12 +286,12 @@ impl App {
             (KeyModifiers::CONTROL, KeyCode::Char('u')) => {
                 self.move_cursor(-(self.viewport_height as isize / 2));
             }
-            (_, KeyCode::Home) | (_, KeyCode::Char('g')) => self.move_to_edge(true),
-            (_, KeyCode::End) | (_, KeyCode::Char('G')) => self.move_to_edge(false),
+            (_, KeyCode::Home | KeyCode::Char('g')) => self.move_to_edge(true),
+            (_, KeyCode::End | KeyCode::Char('G')) => self.move_to_edge(false),
             (_, KeyCode::Char('n')) => self.jump_hunk(1),
             (_, KeyCode::Char('p')) => self.jump_hunk(-1),
             (_, KeyCode::Char('v')) => self.toggle_visual(),
-            (_, KeyCode::Left) | (_, KeyCode::Char('h')) => {
+            (_, KeyCode::Left | KeyCode::Char('h')) => {
                 self.focus = Focus::Files;
             }
             (_, KeyCode::Esc) => {
@@ -489,8 +489,7 @@ impl App {
             .enumerate()
             .skip(start + 1)
             .find(|(_, l)| l.kind == LineKind::HunkHeader)
-            .map(|(i, _)| i)
-            .unwrap_or(len);
+            .map_or(len, |(i, _)| i);
         start..end
     }
 

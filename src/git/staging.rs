@@ -236,22 +236,19 @@ pub fn discard_staged_file(path: &Path, file: &FileInfo) -> Result<()> {
         .iter()
         .find(|f| f.path == file.path)
         .context("file not in the staged diff")?;
-    match fd.old_id.zip(fd.old_mode) {
-        Some((id, mode)) => {
-            let content = blob_content(&repo, id)?;
-            replace_index_blob(&repo, &fd.path, &content, false)?;
-            write_worktree(&repo, &fd.path, &content, true, Some(mode))?;
+    if let Some((id, mode)) = fd.old_id.zip(fd.old_mode) {
+        let content = blob_content(&repo, id)?;
+        replace_index_blob(&repo, &fd.path, &content, false)?;
+        write_worktree(&repo, &fd.path, &content, true, Some(mode))?;
+    } else {
+        // Added file: drop the entry and delete the worktree file.
+        let mut index = owned_index(&repo)?;
+        let rela = BString::from(fd.path.as_str());
+        if let Ok(idx) = index.entry_index_by_path(rela.as_bstr()) {
+            index.remove_entry_at_index(idx);
         }
-        None => {
-            // Added file: drop the entry and delete the worktree file.
-            let mut index = owned_index(&repo)?;
-            let rela = BString::from(fd.path.as_str());
-            if let Ok(idx) = index.entry_index_by_path(rela.as_bstr()) {
-                index.remove_entry_at_index(idx);
-            }
-            index.write(gix::index::write::Options::default())?;
-            write_worktree(&repo, &fd.path, &[], false, None)?;
-        }
+        index.write(gix::index::write::Options::default())?;
+        write_worktree(&repo, &fd.path, &[], false, None)?;
     }
     Ok(())
 }
@@ -305,17 +302,14 @@ fn write_worktree(
     if full.is_symlink() || full.is_file() {
         std::fs::remove_file(&full)?;
     }
-    match mode {
-        Some(Mode::SYMLINK) => {
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(gix::path::from_bstr(BStr::new(content)), &full)?;
-            #[cfg(not(unix))]
-            std::fs::write(&full, content)?;
-        }
-        _ => {
-            std::fs::write(&full, content)?;
-            set_executable(&full, mode == Some(Mode::FILE_EXECUTABLE));
-        }
+    if let Some(Mode::SYMLINK) = mode {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(gix::path::from_bstr(BStr::new(content)), &full)?;
+        #[cfg(not(unix))]
+        std::fs::write(&full, content)?;
+    } else {
+        std::fs::write(&full, content)?;
+        set_executable(&full, mode == Some(Mode::FILE_EXECUTABLE));
     }
     Ok(())
 }
@@ -384,29 +378,26 @@ pub fn stage_file(path: &Path, file: &FileInfo) -> Result<()> {
     let workdir = repo.workdir().context("repository has no worktree")?;
     let mut index = owned_index(&repo)?;
     let rela = BString::from(file.path.as_str());
-    match file.status {
-        FileStatus::Deleted => {
-            if let Ok(idx) = index.entry_index_by_path(rela.as_bstr()) {
-                index.remove_entry_at_index(idx);
-            }
+    if file.status == FileStatus::Deleted {
+        if let Ok(idx) = index.entry_index_by_path(rela.as_bstr()) {
+            index.remove_entry_at_index(idx);
         }
-        _ => {
-            let full = workdir.join(gix::path::from_bstr(rela.as_bstr()));
-            let (content, is_symlink) = if full.is_symlink() {
-                (gix::path::into_bstr(full.read_link()?).to_vec(), true)
-            } else {
-                (
-                    std::fs::read(&full)
-                        .with_context(|| format!("cannot read {}", full.display()))?,
-                    false,
-                )
-            };
-            let id = repo.write_blob(&content)?.detach();
-            let metadata = gix::index::fs::Metadata::from_path_no_follow(&full)?;
-            let stat = gix::index::entry::Stat::from_fs(&metadata)?;
-            let mode = mode_from_fs(&metadata, is_symlink);
-            upsert_entry(&mut index, rela.as_bstr(), id, mode, stat);
-        }
+    } else {
+        let full = workdir.join(gix::path::from_bstr(rela.as_bstr()));
+        let (content, is_symlink) = if full.is_symlink() {
+            (gix::path::into_bstr(full.read_link()?).to_vec(), true)
+        } else {
+            (
+                std::fs::read(&full)
+                    .with_context(|| format!("cannot read {}", full.display()))?,
+                false,
+            )
+        };
+        let id = repo.write_blob(&content)?.detach();
+        let metadata = gix::index::fs::Metadata::from_path_no_follow(&full)?;
+        let stat = gix::index::entry::Stat::from_fs(&metadata)?;
+        let mode = mode_from_fs(&metadata, is_symlink);
+        upsert_entry(&mut index, rela.as_bstr(), id, mode, stat);
     }
     index.write(gix::index::write::Options::default())?;
     Ok(())
@@ -469,24 +460,21 @@ fn apply_to_index(
 
     let mut index = owned_index(repo)?;
     let rela = BString::from(file.path.as_str());
-    match index.entry_index_by_path(rela.as_bstr()) {
-        Ok(idx) => {
-            if new_content.is_empty() && remove_when_empty {
-                index.remove_entry_at_index(idx);
-            } else {
-                index.entries_mut()[idx].id = blob_id;
-            }
+    if let Ok(idx) = index.entry_index_by_path(rela.as_bstr()) {
+        if new_content.is_empty() && remove_when_empty {
+            index.remove_entry_at_index(idx);
+        } else {
+            index.entries_mut()[idx].id = blob_id;
         }
-        Err(_) => {
-            // Untracked file being staged: add a fresh entry with the
-            // worktree's stat and mode.
-            let workdir = repo.workdir().context("repository has no worktree")?;
-            let full = workdir.join(gix::path::from_bstr(rela.as_bstr()));
-            let metadata = gix::index::fs::Metadata::from_path_no_follow(&full)?;
-            let stat = gix::index::entry::Stat::from_fs(&metadata)?;
-            let mode = mode_from_fs(&metadata, full.is_symlink());
-            upsert_entry(&mut index, rela.as_bstr(), blob_id, mode, stat);
-        }
+    } else {
+        // Untracked file being staged: add a fresh entry with the
+        // worktree's stat and mode.
+        let workdir = repo.workdir().context("repository has no worktree")?;
+        let full = workdir.join(gix::path::from_bstr(rela.as_bstr()));
+        let metadata = gix::index::fs::Metadata::from_path_no_follow(&full)?;
+        let stat = gix::index::entry::Stat::from_fs(&metadata)?;
+        let mode = mode_from_fs(&metadata, full.is_symlink());
+        upsert_entry(&mut index, rela.as_bstr(), blob_id, mode, stat);
     }
     index.write(gix::index::write::Options::default())?;
     Ok(())
@@ -507,16 +495,13 @@ fn upsert_entry(
     mode: Mode,
     stat: gix::index::entry::Stat,
 ) {
-    match index.entry_index_by_path(path) {
-        Ok(idx) => {
-            let entry = &mut index.entries_mut()[idx];
-            entry.id = id;
-            entry.mode = mode;
-            entry.stat = stat;
-        }
-        Err(_) => {
-            index.dangerously_push_entry(stat, id, gix::index::entry::Flags::empty(), mode, path);
-            index.sort_entries();
-        }
+    if let Ok(idx) = index.entry_index_by_path(path) {
+        let entry = &mut index.entries_mut()[idx];
+        entry.id = id;
+        entry.mode = mode;
+        entry.stat = stat;
+    } else {
+        index.dangerously_push_entry(stat, id, gix::index::entry::Flags::empty(), mode, path);
+        index.sort_entries();
     }
 }
