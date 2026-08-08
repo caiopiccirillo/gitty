@@ -31,24 +31,24 @@ use crate::tree::{self, FileEntry, Node};
 /// Which side of the staging area is focused (and, in the classic layout,
 /// which one is shown).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Tab {
+pub enum Side {
     Unstaged,
     Staged,
 }
 
-impl Tab {
+impl Side {
     /// Index into [`App::panes`].
     pub fn index(self) -> usize {
         match self {
-            Tab::Unstaged => 0,
-            Tab::Staged => 1,
+            Side::Unstaged => 0,
+            Side::Staged => 1,
         }
     }
 
-    pub fn other(self) -> Tab {
+    pub fn other(self) -> Side {
         match self {
-            Tab::Unstaged => Tab::Staged,
-            Tab::Staged => Tab::Unstaged,
+            Side::Unstaged => Side::Staged,
+            Side::Staged => Side::Unstaged,
         }
     }
 }
@@ -85,7 +85,7 @@ pub struct App {
     pub staged: DiffView,
     /// The focused side: the one shown in the classic layout and the one
     /// the diff keys act on in both layouts.
-    pub tab: Tab,
+    pub side: Side,
     pub mode: Mode,
     pub focus: Focus,
     /// Visible rows of the files pane tree (directories + files).
@@ -138,7 +138,7 @@ impl App {
         let mut app = Self {
             unstaged,
             staged,
-            tab: Tab::Unstaged,
+            side: Side::Unstaged,
             mode: Mode::Classic,
             focus: Focus::Files,
             tree: Vec::new(),
@@ -161,31 +161,31 @@ impl App {
     }
 
     pub fn current_diff(&self) -> &DiffView {
-        self.diff_of(self.tab)
+        self.diff_of(self.side)
     }
 
-    pub fn diff_of(&self, side: Tab) -> &DiffView {
+    pub fn diff_of(&self, side: Side) -> &DiffView {
         match side {
-            Tab::Unstaged => &self.unstaged,
-            Tab::Staged => &self.staged,
+            Side::Unstaged => &self.unstaged,
+            Side::Staged => &self.staged,
         }
     }
 
     /// Pane state of the focused side.
     pub fn pane(&self) -> &PaneState {
-        &self.panes[self.tab.index()]
+        &self.panes[self.side.index()]
     }
 
     pub fn pane_mut(&mut self) -> &mut PaneState {
-        &mut self.panes[self.tab.index()]
+        &mut self.panes[self.side.index()]
     }
 
     /// Pane state of `side`, for rendering both panes in the split layout.
-    pub fn pane_of(&self, side: Tab) -> &PaneState {
+    pub fn pane_of(&self, side: Side) -> &PaneState {
         &self.panes[side.index()]
     }
 
-    pub fn pane_of_mut(&mut self, side: Tab) -> &mut PaneState {
+    pub fn pane_of_mut(&mut self, side: Side) -> &mut PaneState {
         &mut self.panes[side.index()]
     }
 
@@ -208,12 +208,12 @@ impl App {
     /// all files beneath it, concatenated, keeping each file's header lines
     /// as separators.
     pub fn display_lines(&self) -> Vec<&DiffLine> {
-        self.display_lines_for(self.tab)
+        self.display_lines_for(self.side)
     }
 
     /// Like [`display_lines`](Self::display_lines), but for a specific side
     /// (the split layout renders both).
-    pub fn display_lines_for(&self, side: Tab) -> Vec<&DiffLine> {
+    pub fn display_lines_for(&self, side: Side) -> Vec<&DiffLine> {
         let diff = self.diff_of(side);
         match self.selected_node() {
             Some(&Node::File { .. }) => self
@@ -239,26 +239,22 @@ impl App {
     }
 
     /// The index of the selected row in the diff of `side`, if that side
-    /// has changes for it. In the classic layout only the focused side's
-    /// tree exists; in the split layout the merged entry resolves per side.
-    pub fn selected_file_index_in(&self, side: Tab) -> Option<usize> {
+    /// has changes for it. The tree always indexes into [`App::entries`]:
+    /// in the classic layout the entries are built from the focused side
+    /// only, so the other side resolves to `None`.
+    pub fn selected_file_index_in(&self, side: Side) -> Option<usize> {
         let &Node::File { file_idx, .. } = self.selected_node()? else {
             return None;
         };
-        match self.mode {
-            Mode::Classic => (self.tab == side).then_some(file_idx),
-            Mode::Split => {
-                let entry = &self.entries[file_idx];
-                match side {
-                    Tab::Staged => entry.staged,
-                    Tab::Unstaged => entry.unstaged,
-                }
-            }
+        let entry = &self.entries[file_idx];
+        match side {
+            Side::Staged => entry.staged,
+            Side::Unstaged => entry.unstaged,
         }
     }
 
     /// Indices of all files beneath a directory on one side, recursively.
-    fn dir_file_indices(&self, side: Tab, dir: &str) -> Vec<usize> {
+    fn dir_file_indices(&self, side: Side, dir: &str) -> Vec<usize> {
         let prefix = format!("{dir}/");
         self.diff_of(side)
             .files
@@ -270,7 +266,7 @@ impl App {
     }
 
     /// All files beneath a directory on one side, recursively.
-    fn dir_files(&self, side: Tab, dir: &str) -> Vec<FileInfo> {
+    fn dir_files(&self, side: Side, dir: &str) -> Vec<FileInfo> {
         self.dir_file_indices(side, dir)
             .into_iter()
             .filter_map(|i| self.diff_of(side).files.get(i).cloned())
@@ -284,23 +280,29 @@ impl App {
             .position(|n| matches!(n, Node::Dir { path: p, .. } if p == path))
     }
 
-    /// Rebuild the files pane tree and keep the selection valid.
+    /// Rebuild the files pane tree and keep the selection valid. The tree
+    /// always indexes the merged [`FileEntry`] list; in the classic layout
+    /// the entries are built from the focused side only.
     fn rebuild_tree(&mut self) {
-        match self.mode {
-            Mode::Classic => {
-                self.tree = tree::visible_rows(&self.current_diff().files, &self.collapsed_dirs);
-            }
-            Mode::Split => {
-                self.entries = tree::merge_files(&self.staged.files, &self.unstaged.files);
-                self.tree = tree::visible_rows_merged(&self.entries, &self.collapsed_dirs);
-            }
-        }
+        self.entries = match self.mode {
+            Mode::Classic => match self.side {
+                Side::Unstaged => tree::merge_files(&[], &self.unstaged.files),
+                Side::Staged => tree::merge_files(&self.staged.files, &[]),
+            },
+            Mode::Split => tree::merge_files(&self.staged.files, &self.unstaged.files),
+        };
+        self.tree = tree::visible_rows_merged(&self.entries, &self.collapsed_dirs);
         self.selected_row = if self.tree.is_empty() {
             0
         } else {
             self.selected_row.min(self.tree.len() - 1)
         };
         self.files_state.select(Some(self.selected_row));
+    }
+
+    /// Reset both panes' cursor state.
+    fn reset_panes(&mut self) {
+        self.panes = [PaneState::default(); 2];
     }
 
     /// Switch between the classic single-pane layout and the split layout.
@@ -311,7 +313,7 @@ impl App {
         };
         self.focus = Focus::Files;
         self.selected_row = 0;
-        self.panes = [PaneState::default(); 2];
+        self.reset_panes();
         self.rebuild_tree();
         self.snap_to_first_change();
     }
@@ -328,46 +330,46 @@ impl App {
 
     pub fn set_viewport_height(&mut self, height: usize) {
         self.viewport_height = height;
-        for side in [Tab::Unstaged, Tab::Staged] {
+        for side in [Side::Unstaged, Side::Staged] {
             self.clamp_cursor_for(side);
         }
     }
 
-    /// Stage the hunk under the cursor (unstaged tab).
+    /// Stage the hunk under the cursor (unstaged side).
     pub fn stage_selected_hunk(&mut self) {
         self.with_hunk("stage", |repo_path, hunk| {
             git::stage_hunk(repo_path, hunk.file_idx, hunk.hunk_idx)
         });
     }
 
-    /// Unstage the hunk under the cursor (staged tab).
+    /// Unstage the hunk under the cursor (staged side).
     pub fn unstage_selected_hunk(&mut self) {
         self.with_hunk("unstage", |repo_path, hunk| {
             git::unstage_hunk(repo_path, hunk.file_idx, hunk.hunk_idx)
         });
     }
 
-    /// Stage the whole selected file (files pane, unstaged tab).
+    /// Stage the whole selected file (files pane, unstaged side).
     pub fn stage_selected_file(&mut self) {
-        self.stage_file_in(self.tab);
+        self.stage_file_in(self.side);
     }
 
     /// Stage the whole selected file as seen on `side`.
-    pub fn stage_file_in(&mut self, side: Tab) {
+    pub fn stage_file_in(&mut self, side: Side) {
         self.with_file_in(side, "stage", git::stage_file);
     }
 
-    /// Unstage the whole selected file (files pane, staged tab).
+    /// Unstage the whole selected file (files pane, staged side).
     pub fn unstage_selected_file(&mut self) {
-        self.unstage_file_in(self.tab);
+        self.unstage_file_in(self.side);
     }
 
     /// Unstage the whole selected file as seen on `side`.
-    pub fn unstage_file_in(&mut self, side: Tab) {
+    pub fn unstage_file_in(&mut self, side: Side) {
         self.with_file_in(side, "unstage", git::unstage_file);
     }
 
-    fn with_file_in(&mut self, side: Tab, verb: &str, op: impl FnOnce(&Path, &FileInfo) -> Result<()>) {
+    fn with_file_in(&mut self, side: Side, verb: &str, op: impl FnOnce(&Path, &FileInfo) -> Result<()>) {
         let Some(file) = self
             .selected_file_index_in(side)
             .and_then(|i| self.diff_of(side).files.get(i))
@@ -375,31 +377,28 @@ impl App {
         else {
             return;
         };
-        self.message = match op(&self.repo_path, &file).and_then(|()| self.refresh()) {
-            Ok(()) => None,
-            Err(e) => Some(format!("{verb} failed: {e}")),
-        };
+        self.run_op(verb, |repo_path| op(repo_path, &file));
     }
 
-    /// Stage all files beneath the selected directory (files pane, unstaged tab).
+    /// Stage all files beneath the selected directory (files pane, unstaged side).
     pub fn stage_selected_dir(&mut self) {
-        self.stage_dir_in(self.tab);
+        self.stage_dir_in(self.side);
     }
 
     /// Stage all files beneath the selected directory as seen on `side`.
-    pub fn stage_dir_in(&mut self, side: Tab) {
+    pub fn stage_dir_in(&mut self, side: Side) {
         if let Some(Node::Dir { path, .. }) = self.selected_node().cloned() {
             self.with_dir_in(side, "stage", &path, git::stage_file);
         }
     }
 
-    /// Unstage all files beneath the selected directory (files pane, staged tab).
+    /// Unstage all files beneath the selected directory (files pane, staged side).
     pub fn unstage_selected_dir(&mut self) {
-        self.unstage_dir_in(self.tab);
+        self.unstage_dir_in(self.side);
     }
 
     /// Unstage all files beneath the selected directory as seen on `side`.
-    pub fn unstage_dir_in(&mut self, side: Tab) {
+    pub fn unstage_dir_in(&mut self, side: Side) {
         if let Some(Node::Dir { path, .. }) = self.selected_node().cloned() {
             self.with_dir_in(side, "unstage", &path, git::unstage_file);
         }
@@ -407,30 +406,23 @@ impl App {
 
     fn with_dir_in(
         &mut self,
-        side: Tab,
+        side: Side,
         verb: &str,
         dir: &str,
         op: impl Fn(&Path, &FileInfo) -> Result<()>,
     ) {
         let files = self.dir_files(side, dir);
-        self.message = match files
-            .iter()
-            .try_for_each(|f| op(&self.repo_path, f))
-            .and_then(|()| self.refresh())
-        {
-            Ok(()) => None,
-            Err(e) => Some(format!("{verb} failed: {e}")),
-        };
+        self.run_op(verb, |repo_path| files.iter().try_for_each(|f| op(repo_path, f)));
     }
 
     /// Range of display lines covered by the visual selection, if active.
     pub fn selection_range(&self) -> Option<Range<usize>> {
-        self.selection_range_for(self.tab)
+        self.selection_range_for(self.side)
     }
 
     /// Like [`selection_range`](Self::selection_range), but for a specific
     /// pane.
-    pub fn selection_range_for(&self, side: Tab) -> Option<Range<usize>> {
+    pub fn selection_range_for(&self, side: Side) -> Option<Range<usize>> {
         let pane = self.pane_of(side);
         let anchor = pane.visual_anchor?;
         Some(anchor.min(pane.cursor)..anchor.max(pane.cursor) + 1)
@@ -468,53 +460,45 @@ impl App {
         (!selected.is_empty()).then_some((hunk, selected))
     }
 
-    /// Stage only the visually selected lines (unstaged tab).
+    /// Stage only the visually selected lines (unstaged side).
     pub fn stage_selected_lines(&mut self) {
         let Some((hunk, selected)) = self.selected_lines() else {
             self.message = Some("no changed lines selected".into());
             return;
         };
-        self.message =
-            match git::stage_lines(&self.repo_path, hunk.file_idx, hunk.hunk_idx, &selected)
-                .and_then(|()| self.refresh())
-            {
-                Ok(()) => None,
-                Err(e) => Some(format!("stage failed: {e}")),
-            };
+        self.run_op("stage", |repo_path| {
+            git::stage_lines(repo_path, hunk.file_idx, hunk.hunk_idx, &selected)
+        });
     }
 
-    /// Unstage only the visually selected lines (staged tab).
+    /// Unstage only the visually selected lines (staged side).
     pub fn unstage_selected_lines(&mut self) {
         let Some((hunk, selected)) = self.selected_lines() else {
             self.message = Some("no changed lines selected".into());
             return;
         };
-        self.message =
-            match git::unstage_lines(&self.repo_path, hunk.file_idx, hunk.hunk_idx, &selected)
-                .and_then(|()| self.refresh())
-            {
-                Ok(()) => None,
-                Err(e) => Some(format!("unstage failed: {e}")),
-            };
+        self.run_op("unstage", |repo_path| {
+            git::unstage_lines(repo_path, hunk.file_idx, hunk.hunk_idx, &selected)
+        });
     }
 
     /// Open the discard prompt for what's under the cursor (`d`).
     pub fn prompt_discard(&mut self) {
-        let staged = self.tab == Tab::Staged;
+        let side = self.side;
         let action = match self.focus {
             Focus::Files => match self.selected_node().cloned() {
                 Some(Node::File { .. }) => {
                     let Some(file) = self
-                        .selected_file_index_in(self.tab)
-                        .and_then(|i| self.current_diff().files.get(i))
+                        .selected_file_index_in(side)
+                        .and_then(|i| self.diff_of(side).files.get(i))
                         .cloned()
                     else {
                         self.message = Some("nothing to discard on this side".into());
                         return;
                     };
-                    DiscardAction::File(file, staged)
+                    DiscardAction::File { file, side }
                 }
-                Some(Node::Dir { path, .. }) => DiscardAction::Dir(path, staged),
+                Some(Node::Dir { path, .. }) => DiscardAction::Dir { path, side },
                 None => return,
             },
             Focus::Diff => {
@@ -523,44 +507,34 @@ impl App {
                     return;
                 };
                 match self.selected_lines() {
-                    Some((hunk, selected)) => DiscardAction::Lines {
-                        file_idx: hunk.file_idx,
-                        hunk_idx: hunk.hunk_idx,
-                        selected,
-                        staged,
-                    },
+                    Some((hunk, selected)) => DiscardAction::Lines { hunk, selected, side },
                     None if self.pane().visual_anchor.is_some() => {
                         self.message = Some("no changed lines selected".into());
                         return;
                     }
-                    None => DiscardAction::Hunk {
-                        file_idx: hunk.file_idx,
-                        hunk_idx: hunk.hunk_idx,
-                        staged,
-                    },
+                    None => DiscardAction::Hunk { hunk, side },
                 }
             }
         };
         let what = match &action {
-            DiscardAction::Hunk { file_idx, hunk_idx, .. } => {
-                let path = &self.current_diff().files[*file_idx].path;
-                format!("hunk {} of {path}", hunk_idx + 1)
+            DiscardAction::Hunk { hunk, .. } => {
+                let path = &self.diff_of(side).files[hunk.file_idx].path;
+                format!("hunk {} of {path}", hunk.hunk_idx + 1)
             }
-            DiscardAction::Lines {
-                file_idx,
-                hunk_idx,
-                selected,
-                ..
-            } => {
-                let path = &self.current_diff().files[*file_idx].path;
+            DiscardAction::Lines { hunk, selected, .. } => {
+                let path = &self.diff_of(side).files[hunk.file_idx].path;
                 format!(
                     "{} line(s) of hunk {} in {path}",
                     selected.additions.len() + selected.deletions.len(),
-                    hunk_idx + 1
+                    hunk.hunk_idx + 1
                 )
             }
-            DiscardAction::File(file, _) => format!("file {}", file.path),
-            DiscardAction::Dir(path, _) => format!("directory {path}/"),
+            DiscardAction::File { file, .. } => format!("file {}", file.path),
+            DiscardAction::Dir { path, .. } => format!("directory {path}/"),
+            DiscardAction::Files { files, .. } => {
+                let dir = files.first().and_then(|f| tree::parent_dir(&f.path)).unwrap_or("");
+                format!("directory {dir}/")
+            }
         };
         self.discard_confirm = Some(DiscardPrompt { what, action });
     }
@@ -570,57 +544,25 @@ impl App {
         let Some(prompt) = self.discard_confirm.take() else {
             return;
         };
-        self.message = match self.execute_discard(prompt.action) {
-            Ok(()) => None,
-            Err(e) => Some(format!("discard failed: {e}")),
+        // Directories are resolved to their files here, where the diffs are
+        // available; the operation itself needs no app state.
+        let action = match prompt.action {
+            DiscardAction::Dir { path, side } => {
+                let files = self.dir_files(side, &path);
+                DiscardAction::Files { files, side }
+            }
+            other => other,
         };
+        self.run_op("discard", |repo_path| execute_discard(repo_path, action));
     }
 
-    fn execute_discard(&mut self, action: DiscardAction) -> Result<()> {
-        let repo_path = self.repo_path.clone();
-        match action {
-            DiscardAction::Hunk {
-                file_idx,
-                hunk_idx,
-                staged,
-            } => {
-                if staged {
-                    git::discard_staged_hunk(&repo_path, file_idx, hunk_idx)?;
-                } else {
-                    git::discard_hunk(&repo_path, file_idx, hunk_idx)?;
-                }
-            }
-            DiscardAction::Lines {
-                file_idx,
-                hunk_idx,
-                selected,
-                staged,
-            } => {
-                if staged {
-                    git::discard_staged_lines(&repo_path, file_idx, hunk_idx, &selected)?;
-                } else {
-                    git::discard_lines(&repo_path, file_idx, hunk_idx, &selected)?;
-                }
-            }
-            DiscardAction::File(file, staged) => {
-                if staged {
-                    git::discard_staged_file(&repo_path, &file)?;
-                } else {
-                    git::discard_file(&repo_path, &file)?;
-                }
-            }
-            DiscardAction::Dir(path, staged) => {
-                let side = if staged { Tab::Staged } else { Tab::Unstaged };
-                for file in self.dir_files(side, &path) {
-                    if staged {
-                        git::discard_staged_file(&repo_path, &file)?;
-                    } else {
-                        git::discard_file(&repo_path, &file)?;
-                    }
-                }
-            }
-        }
-        self.refresh()
+    /// Run a git operation against the repo and refresh, showing failures
+    /// in the status bar.
+    fn run_op(&mut self, verb: &str, op: impl FnOnce(&Path) -> Result<()>) {
+        self.message = match op(&self.repo_path).and_then(|()| self.refresh()) {
+            Ok(()) => None,
+            Err(e) => Some(format!("{verb} failed: {e}")),
+        };
     }
 
     fn with_hunk(&mut self, verb: &str, op: impl FnOnce(&Path, HunkId) -> Result<()>) {
@@ -628,10 +570,7 @@ impl App {
             self.message = Some("no hunk under the cursor".into());
             return;
         };
-        self.message = match op(&self.repo_path, hunk).and_then(|()| self.refresh()) {
-            Ok(()) => None,
-            Err(e) => Some(format!("{verb} failed: {e}")),
-        };
+        self.run_op(verb, |repo_path| op(repo_path, hunk));
     }
 
     /// Reload both diffs from disk (synchronously, after a mutation) and
@@ -728,7 +667,7 @@ impl App {
                 pane.scroll = 0;
             }
         }
-        for side in [Tab::Unstaged, Tab::Staged] {
+        for side in [Side::Unstaged, Side::Staged] {
             self.clamp_cursor_for(side);
         }
     }
@@ -752,14 +691,48 @@ impl App {
         })
     }
 
-    /// The path of a file row: the merged entry in split mode, the focused
-    /// diff's file in classic mode.
+    /// The path of a file row (from the merged entries, for both layouts).
     fn file_path_at(&self, file_idx: usize) -> String {
-        match self.mode {
-            Mode::Classic => self.current_diff().files[file_idx].path.clone(),
-            Mode::Split => self.entries[file_idx].path.clone(),
-        }
+        self.entries[file_idx].path.clone()
     }
+}
+
+/// Run the git operations behind a confirmed discard.
+fn execute_discard(repo_path: &Path, action: DiscardAction) -> Result<()> {
+    match action {
+        DiscardAction::Hunk { hunk, side } => {
+            if side == Side::Staged {
+                git::discard_staged_hunk(repo_path, hunk.file_idx, hunk.hunk_idx)?;
+            } else {
+                git::discard_hunk(repo_path, hunk.file_idx, hunk.hunk_idx)?;
+            }
+        }
+        DiscardAction::Lines { hunk, selected, side } => {
+            if side == Side::Staged {
+                git::discard_staged_lines(repo_path, hunk.file_idx, hunk.hunk_idx, &selected)?;
+            } else {
+                git::discard_lines(repo_path, hunk.file_idx, hunk.hunk_idx, &selected)?;
+            }
+        }
+        DiscardAction::File { file, side } => {
+            if side == Side::Staged {
+                git::discard_staged_file(repo_path, &file)?;
+            } else {
+                git::discard_file(repo_path, &file)?;
+            }
+        }
+        DiscardAction::Files { files, side } => {
+            for file in files {
+                if side == Side::Staged {
+                    git::discard_staged_file(repo_path, &file)?;
+                } else {
+                    git::discard_file(repo_path, &file)?;
+                }
+            }
+        }
+        DiscardAction::Dir { .. } => unreachable!("resolved to Files before execution"),
+    }
+    Ok(())
 }
 
 /// Path-based identity of a tree row (see [`App::refresh`]).
@@ -784,23 +757,20 @@ pub struct DiscardPrompt {
     pub action: DiscardAction,
 }
 
-/// What a confirmed discard should revert. `staged` selects the staged-tab
+/// What a confirmed discard should revert. The side selects the staged-tab
 /// operations, which revert both the worktree and the index to HEAD.
 #[derive(Debug)]
 pub enum DiscardAction {
-    Hunk {
-        file_idx: usize,
-        hunk_idx: usize,
-        staged: bool,
-    },
+    Hunk { hunk: HunkId, side: Side },
     Lines {
-        file_idx: usize,
-        hunk_idx: usize,
+        hunk: HunkId,
         selected: SelectedLines,
-        staged: bool,
+        side: Side,
     },
-    File(FileInfo, bool),
-    Dir(String, bool),
+    File { file: FileInfo, side: Side },
+    Dir { path: String, side: Side },
+    /// A directory resolved to its files, ready to discard.
+    Files { files: Vec<FileInfo>, side: Side },
 }
 
 impl CommitInput {
@@ -971,7 +941,7 @@ mod tests {
         let mut app = test_app();
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Tab);
-        assert_eq!(app.tab, Tab::Staged);
+        assert_eq!(app.side, Side::Staged);
         assert_eq!(app.selected_row, 0);
         assert_eq!(app.focus, Focus::Files);
         // Staged side is empty: Enter must not focus the diff.
@@ -1057,7 +1027,13 @@ mod tests {
         let mut app = test_app();
         press(&mut app, KeyCode::Char('d'));
         let prompt = app.discard_confirm.take().unwrap();
-        assert!(matches!(prompt.action, DiscardAction::File(ref f, false) if f.path == "a.txt"));
+        assert!(matches!(
+            prompt.action,
+            DiscardAction::File {
+                file: ref f,
+                side: Side::Unstaged
+            } if f.path == "a.txt"
+        ));
         assert_eq!(prompt.what, "file a.txt");
     }
 
@@ -1073,9 +1049,11 @@ mod tests {
         assert!(matches!(
             prompt.action,
             DiscardAction::Lines {
-                file_idx: 1,
-                hunk_idx: 0,
-                staged: false,
+                hunk: HunkId {
+                    file_idx: 1,
+                    hunk_idx: 0
+                },
+                side: Side::Unstaged,
                 ..
             }
         ));
@@ -1097,10 +1075,10 @@ mod tests {
         // unstaged one.
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Char('j'));
-        assert_eq!(app.selected_file_index_in(Tab::Staged), Some(0));
-        assert_eq!(app.selected_file_index_in(Tab::Unstaged), None);
-        assert_eq!(app.display_lines_for(Tab::Staged).len(), 2);
-        assert!(app.display_lines_for(Tab::Unstaged).is_empty());
+        assert_eq!(app.selected_file_index_in(Side::Staged), Some(0));
+        assert_eq!(app.selected_file_index_in(Side::Unstaged), None);
+        assert_eq!(app.display_lines_for(Side::Staged).len(), 2);
+        assert!(app.display_lines_for(Side::Unstaged).is_empty());
     }
 
     #[test]
@@ -1108,14 +1086,14 @@ mod tests {
         let mut app = split_app();
         // File a.txt (two hunks) on the unstaged side.
         press(&mut app, KeyCode::Enter);
-        assert_eq!(app.tab, Tab::Unstaged);
+        assert_eq!(app.side, Side::Unstaged);
         press(&mut app, KeyCode::Char('n'));
         let unstaged_cursor = app.cursor();
         assert!(unstaged_cursor > 0);
 
         // Tab moves the diff focus to the next visible pane.
         press(&mut app, KeyCode::Tab);
-        assert_eq!(app.tab, Tab::Staged);
+        assert_eq!(app.side, Side::Staged);
         assert_eq!(app.selected_row, 0, "selection preserved");
         assert_eq!(app.focus, Focus::Diff, "focus stays in the diff");
 
@@ -1127,7 +1105,7 @@ mod tests {
         press(&mut app, KeyCode::Tab);
         assert_eq!(app.focus, Focus::Files);
         assert_eq!(
-            app.pane_of(Tab::Unstaged).cursor,
+            app.pane_of(Side::Unstaged).cursor,
             unstaged_cursor,
             "unstaged cursor preserved"
         );
@@ -1141,11 +1119,11 @@ mod tests {
         // From the files pane, Tab enters the first visible diff pane.
         press(&mut app, KeyCode::Tab);
         assert_eq!(app.selected_row, 1, "selection kept when moving focus");
-        assert_eq!(app.tab, Tab::Unstaged);
+        assert_eq!(app.side, Side::Unstaged);
         assert_eq!(app.focus, Focus::Diff);
         // And keeps cycling through the visible panes.
         press(&mut app, KeyCode::Tab);
-        assert_eq!(app.tab, Tab::Staged);
+        assert_eq!(app.side, Side::Staged);
         press(&mut app, KeyCode::Tab);
         assert_eq!(app.focus, Focus::Files);
     }
@@ -1155,7 +1133,7 @@ mod tests {
         let mut app = test_app(); // staged side is empty
         press(&mut app, KeyCode::Char('m'));
         press(&mut app, KeyCode::Tab);
-        assert_eq!(app.tab, Tab::Unstaged, "cannot focus the hidden staged pane");
+        assert_eq!(app.side, Side::Unstaged, "cannot focus the hidden staged pane");
         press(&mut app, KeyCode::Char('m'));
         assert_eq!(app.mode, Mode::Classic);
     }

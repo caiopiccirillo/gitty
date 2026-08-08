@@ -6,7 +6,7 @@ use common::{BASE, commit_file};
 use git2::Repository;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use gitiff::app::{App, Focus, Mode, Tab};
+use gitiff::app::{App, Focus, Mode, Side};
 use gitiff::git::{load_staged_diff, load_unstaged_diff};
 
 /// Repo with f.txt and g.txt, both modified (one hunk each).
@@ -53,8 +53,8 @@ fn split_mode_stages_from_the_unstaged_pane_and_unstages_from_the_staged_pane() 
     // Tab moves the focus to the staged pane: the staged pane shows the
     // hunk, and u unstages it from there.
     press(&mut app, KeyCode::Tab);
-    assert_eq!(app.tab, Tab::Staged);
-    assert!(app.display_lines_for(Tab::Staged).iter().any(|l| l.content == "L1"));
+    assert_eq!(app.side, Side::Staged);
+    assert!(app.display_lines_for(Side::Staged).iter().any(|l| l.content == "L1"));
     press(&mut app, KeyCode::Char('u'));
     assert_eq!(app.message, None);
     assert!(load_staged_diff(dir.path()).unwrap().files.is_empty());
@@ -79,7 +79,7 @@ fn split_mode_keeps_the_selection_when_switching_panes() {
     let unstaged_cursor = app.cursor();
 
     press(&mut app, KeyCode::Tab);
-    assert_eq!(app.tab, Tab::Staged);
+    assert_eq!(app.side, Side::Staged);
     assert_eq!(app.selected_row, 1, "selection kept");
     assert_eq!(app.cursor(), 0, "staged pane starts at its own position");
 
@@ -87,7 +87,7 @@ fn split_mode_keeps_the_selection_when_switching_panes() {
     assert_eq!(app.focus, Focus::Files, "Tab past the last pane returns to files");
     assert_eq!(app.selected_row, 1);
     assert_eq!(
-        app.pane_of(Tab::Unstaged).cursor,
+        app.pane_of(Side::Unstaged).cursor,
         unstaged_cursor,
         "cursor restored"
     );
@@ -139,8 +139,8 @@ fn split_mode_tab_lands_in_the_staged_pane_after_staging() {
     // visible diff pane.
     press(&mut app, KeyCode::Tab);
     assert_eq!(app.focus, Focus::Diff);
-    assert_eq!(app.tab, Tab::Staged);
-    assert!(app.display_lines_for(Tab::Staged).iter().any(|l| l.content == "L1"));
+    assert_eq!(app.side, Side::Staged);
+    assert!(app.display_lines_for(Side::Staged).iter().any(|l| l.content == "L1"));
 
     // u unstages the hunk from the staged pane.
     press(&mut app, KeyCode::Char('u'));

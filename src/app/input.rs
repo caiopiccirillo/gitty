@@ -19,7 +19,7 @@ impl App {
             (_, KeyCode::Char('q')) | (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
                 self.should_quit = true;
             }
-            (_, KeyCode::Tab) => self.switch_tab(),
+            (_, KeyCode::Tab) => self.cycle_focus(),
             (_, KeyCode::Char('c')) => self.open_commit(),
             (_, KeyCode::Char('m')) => self.toggle_mode(),
             _ => match self.focus {
@@ -78,28 +78,28 @@ impl App {
             KeyCode::Right | KeyCode::Char('l') => self.files_right(),
             KeyCode::Left | KeyCode::Char('h') => self.files_left(),
             KeyCode::Char(' ') => match self.mode {
-                Mode::Classic => match (self.tab, self.selected_node().cloned()) {
-                    (Tab::Unstaged, Some(Node::File { .. })) => self.stage_selected_file(),
-                    (Tab::Unstaged, Some(Node::Dir { .. })) => self.stage_selected_dir(),
-                    (Tab::Staged, Some(Node::File { .. })) => self.unstage_selected_file(),
-                    (Tab::Staged, Some(Node::Dir { .. })) => self.unstage_selected_dir(),
+                Mode::Classic => match (self.side, self.selected_node().cloned()) {
+                    (Side::Unstaged, Some(Node::File { .. })) => self.stage_selected_file(),
+                    (Side::Unstaged, Some(Node::Dir { .. })) => self.stage_selected_dir(),
+                    (Side::Staged, Some(Node::File { .. })) => self.unstage_selected_file(),
+                    (Side::Staged, Some(Node::Dir { .. })) => self.unstage_selected_dir(),
                     _ => {}
                 },
                 // Lazygit-style toggle: stage the unstaged part of the
                 // selection, otherwise unstage it.
                 Mode::Split => match self.selected_node().cloned() {
                     Some(Node::File { .. }) => {
-                        if self.selected_file_index_in(Tab::Unstaged).is_some() {
-                            self.stage_file_in(Tab::Unstaged);
-                        } else if self.selected_file_index_in(Tab::Staged).is_some() {
-                            self.unstage_file_in(Tab::Staged);
+                        if self.selected_file_index_in(Side::Unstaged).is_some() {
+                            self.stage_file_in(Side::Unstaged);
+                        } else if self.selected_file_index_in(Side::Staged).is_some() {
+                            self.unstage_file_in(Side::Staged);
                         }
                     }
                     Some(Node::Dir { path, .. }) => {
-                        if !self.dir_file_indices(Tab::Unstaged, &path).is_empty() {
-                            self.stage_dir_in(Tab::Unstaged);
-                        } else if !self.dir_file_indices(Tab::Staged, &path).is_empty() {
-                            self.unstage_dir_in(Tab::Staged);
+                        if !self.dir_file_indices(Side::Unstaged, &path).is_empty() {
+                            self.stage_dir_in(Side::Unstaged);
+                        } else if !self.dir_file_indices(Side::Staged, &path).is_empty() {
+                            self.unstage_dir_in(Side::Staged);
                         }
                     }
                     None => {}
@@ -213,14 +213,14 @@ impl App {
                     self.focus = Focus::Files;
                 }
             }
-            (_, KeyCode::Char('s')) if self.tab == Tab::Unstaged => {
+            (_, KeyCode::Char('s')) if self.side == Side::Unstaged => {
                 if self.pane().visual_anchor.is_some() {
                     self.stage_selected_lines();
                 } else {
                     self.stage_selected_hunk();
                 }
             }
-            (_, KeyCode::Char('u')) if self.tab == Tab::Staged => {
+            (_, KeyCode::Char('u')) if self.side == Side::Staged => {
                 if self.pane().visual_anchor.is_some() {
                     self.unstage_selected_lines();
                 } else {
@@ -243,12 +243,12 @@ impl App {
         };
     }
 
-    fn switch_tab(&mut self) {
+    fn cycle_focus(&mut self) {
         match self.mode {
             // The classic layout swaps which side is shown and resets the
             // files selection, as before.
             Mode::Classic => {
-                self.tab = self.tab.other();
+                self.side = self.side.other();
                 self.focus = Focus::Files;
                 self.selected_row = 0;
                 self.rebuild_tree();
@@ -263,29 +263,29 @@ impl App {
             // whose pane is hidden. This way, Tab after staging lands in
             // the staged pane where `u` unstages.
             Mode::Split => {
-                let visible: Vec<Tab> = [Tab::Unstaged, Tab::Staged]
+                let visible: Vec<Side> = [Side::Unstaged, Side::Staged]
                     .into_iter()
                     .filter(|&side| !self.diff_of(side).files.is_empty())
                     .collect();
                 match self.focus {
                     Focus::Files => {
                         if let Some(&side) = visible.first() {
-                            self.tab = side;
+                            self.side = side;
                             self.focus = Focus::Diff;
                         }
                     }
-                    Focus::Diff => match visible.iter().position(|&side| side == self.tab) {
+                    Focus::Diff => match visible.iter().position(|&side| side == self.side) {
                         // The focused side is hidden: move to the first
                         // visible pane instead of dropping back to files.
                         None => {
                             if let Some(&side) = visible.first() {
-                                self.tab = side;
+                                self.side = side;
                             } else {
                                 self.focus = Focus::Files;
                             }
                         }
                         Some(i) if i + 1 < visible.len() => {
-                            self.tab = visible[i + 1];
+                            self.side = visible[i + 1];
                         }
                         Some(_) => self.focus = Focus::Files,
                     },
@@ -297,8 +297,8 @@ impl App {
     fn select_row(&mut self, idx: usize) {
         self.selected_row = idx;
         self.files_state.select(Some(idx));
-        self.panes = [PaneState::default(); 2];
-        for side in [Tab::Unstaged, Tab::Staged] {
+        self.reset_panes();
+        for side in [Side::Unstaged, Side::Staged] {
             self.snap_to_first_change_for(side);
         }
     }
@@ -316,10 +316,10 @@ impl App {
     /// selection is active the cursor stays inside its hunk so the selection
     /// always maps to a single, well-formed patch.
     fn move_cursor(&mut self, delta: isize) {
-        self.move_cursor_in(self.tab, delta);
+        self.move_cursor_in(self.side, delta);
     }
 
-    fn move_cursor_in(&mut self, side: Tab, delta: isize) {
+    fn move_cursor_in(&mut self, side: Side, delta: isize) {
         let (start, positions, current) = {
             let bounds = self.cursor_bounds_for(side);
             if bounds.is_empty() {
@@ -344,10 +344,10 @@ impl App {
 
     /// Jump to the first or last changed line of the focused pane.
     fn move_to_edge(&mut self, first: bool) {
-        self.move_to_edge_in(self.tab, first);
+        self.move_to_edge_in(self.side, first);
     }
 
-    fn move_to_edge_in(&mut self, side: Tab, first: bool) {
+    fn move_to_edge_in(&mut self, side: Side, first: bool) {
         let (start, edge) = {
             let bounds = self.cursor_bounds_for(side);
             if bounds.is_empty() {
@@ -371,7 +371,7 @@ impl App {
 
     /// Lines the cursor of `side` may roam: the whole file diff normally,
     /// only the selected hunk while a visual selection is active.
-    fn cursor_bounds_for(&self, side: Tab) -> Range<usize> {
+    fn cursor_bounds_for(&self, side: Side) -> Range<usize> {
         match self.pane_of(side).visual_anchor {
             Some(anchor) => self.hunk_bounds_for(side, anchor),
             None => 0..self.display_lines_for(side).len(),
@@ -382,10 +382,10 @@ impl App {
     /// the focused pane: from its `@@` header to just before the next
     /// header (or the end of the file).
     pub(super) fn hunk_bounds_at(&self, line_idx: usize) -> Range<usize> {
-        self.hunk_bounds_for(self.tab, line_idx)
+        self.hunk_bounds_for(self.side, line_idx)
     }
 
-    fn hunk_bounds_for(&self, side: Tab, line_idx: usize) -> Range<usize> {
+    fn hunk_bounds_for(&self, side: Side, line_idx: usize) -> Range<usize> {
         let lines = self.display_lines_for(side);
         let len = lines.len();
         if len == 0 {
@@ -426,10 +426,10 @@ impl App {
 
     /// Land the cursor of the focused pane on the first changed line.
     pub(super) fn snap_to_first_change(&mut self) {
-        self.snap_to_first_change_for(self.tab);
+        self.snap_to_first_change_for(self.side);
     }
 
-    fn snap_to_first_change_for(&mut self, side: Tab) {
+    fn snap_to_first_change_for(&mut self, side: Side) {
         let first = {
             let lines = self.display_lines_for(side);
             changed_positions(&lines).first().copied()
@@ -443,12 +443,12 @@ impl App {
     /// Keep the cursor of the focused pane inside the displayed lines and
     /// scroll so it stays visible.
     pub(super) fn clamp_cursor(&mut self) {
-        self.clamp_cursor_for(self.tab);
+        self.clamp_cursor_for(self.side);
     }
 
     /// Keep the cursor of `side` inside the displayed lines and scroll so
     /// it stays visible.
-    pub(super) fn clamp_cursor_for(&mut self, side: Tab) {
+    pub(super) fn clamp_cursor_for(&mut self, side: Side) {
         let (len, viewport) = {
             let lines = self.display_lines_for(side);
             (lines.len(), self.viewport_height)

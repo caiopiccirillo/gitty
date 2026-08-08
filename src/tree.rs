@@ -76,13 +76,9 @@ pub fn parent_dir(path: &str) -> Option<&str> {
     path.rfind('/').map(|i| &path[..i])
 }
 
-/// Build the visible rows from a file list, honoring collapsed directories.
-/// Directories sort before the files of their level; both alphabetically.
-pub fn visible_rows(files: &[FileInfo], collapsed: &HashSet<String>) -> Vec<Node> {
-    build_rows(files.len(), collapsed, &|i| &files[i].path)
-}
-
-/// Build the visible rows from the merged file entries.
+/// Build the visible rows from the merged file entries, honoring collapsed
+/// directories. Directories sort before the files of their level; both
+/// alphabetically. The classic layout feeds this a single-side merge.
 pub fn visible_rows_merged(entries: &[FileEntry], collapsed: &HashSet<String>) -> Vec<Node> {
     build_rows(entries.len(), collapsed, &|i| &entries[i].path)
 }
@@ -186,6 +182,12 @@ mod tests {
         ])
     }
 
+    /// Entries for a single side (the classic layout feeds these to the
+    /// merged builder).
+    fn side_entries(files: &[FileInfo]) -> Vec<FileEntry> {
+        merge_files(&[], files)
+    }
+
     fn dir_paths(rows: &[Node]) -> Vec<&str> {
         rows.iter()
             .filter_map(|n| match n {
@@ -197,7 +199,7 @@ mod tests {
 
     #[test]
     fn builds_nested_rows_dirs_first() {
-        let rows = visible_rows(&nested_files(), &HashSet::new());
+        let rows = visible_rows_merged(&side_entries(&nested_files()), &HashSet::new());
         let outline: Vec<(String, usize)> = rows
             .iter()
             .map(|n| match n {
@@ -232,7 +234,7 @@ mod tests {
     #[test]
     fn collapsed_dirs_hide_their_children() {
         let collapsed: HashSet<String> = ["src".to_string()].into_iter().collect();
-        let rows = visible_rows(&nested_files(), &collapsed);
+        let rows = visible_rows_merged(&side_entries(&nested_files()), &collapsed);
         assert_eq!(dir_paths(&rows), vec!["src", "tests"]);
         assert_eq!(
             rows.len(),
@@ -255,7 +257,7 @@ mod tests {
     #[test]
     fn nested_collapse_hides_only_that_subtree() {
         let collapsed: HashSet<String> = ["src/git".to_string()].into_iter().collect();
-        let rows = visible_rows(&nested_files(), &collapsed);
+        let rows = visible_rows_merged(&side_entries(&nested_files()), &collapsed);
         assert_eq!(dir_paths(&rows), vec!["src", "src/git", "tests"]);
         assert!(!rows.iter().any(|n| matches!(
             n,

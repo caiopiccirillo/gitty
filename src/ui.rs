@@ -9,7 +9,7 @@ use ratatui::{
     widgets::{Block, Clear, HighlightSpacing, List, ListItem, Paragraph},
 };
 
-use crate::app::{App, CommitInput, Focus, Mode, Tab};
+use crate::app::{App, CommitInput, Focus, Mode, Side};
 use crate::diff::{FileInfo, FileStatus, HunkId, LineKind};
 use crate::tree::Node;
 
@@ -23,7 +23,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                     .areas(main_area);
             app.set_viewport_height(diff_area.height.saturating_sub(2) as usize);
             render_files(frame, app, files_area);
-            render_diff(frame, app, diff_area, app.tab);
+            render_diff(frame, app, diff_area, app.side);
         }
         Mode::Split => {
             let has_unstaged = !app.unstaged.files.is_empty();
@@ -40,15 +40,15 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                     .areas(main_area);
                     app.set_viewport_height(unstaged_area.height.saturating_sub(2) as usize);
                     render_files(frame, app, files_area);
-                    render_diff(frame, app, unstaged_area, Tab::Unstaged);
-                    render_diff(frame, app, staged_area, Tab::Staged);
+                    render_diff(frame, app, unstaged_area, Side::Unstaged);
+                    render_diff(frame, app, staged_area, Side::Staged);
                 }
                 // Panes without content are hidden entirely.
                 (true, false) => {
-                    render_split_side(frame, app, main_area, Tab::Unstaged);
+                    render_split_side(frame, app, main_area, Side::Unstaged);
                 }
                 (false, true) => {
-                    render_split_side(frame, app, main_area, Tab::Staged);
+                    render_split_side(frame, app, main_area, Side::Staged);
                 }
                 (false, false) => {
                     app.set_viewport_height(0);
@@ -64,7 +64,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 }
 
 /// The files pane plus one diff pane, filling the whole width.
-fn render_split_side(frame: &mut Frame, app: &mut App, main_area: Rect, side: Tab) {
+fn render_split_side(frame: &mut Frame, app: &mut App, main_area: Rect, side: Side) {
     let [files_area, diff_area] =
         Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)])
             .areas(main_area);
@@ -102,11 +102,10 @@ fn render_commit_box(frame: &mut Frame, input: &CommitInput) {
 fn render_files(frame: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::Files;
     let (title, items) = {
-        let diff = app.current_diff();
         let title = match app.mode {
-            Mode::Classic => match app.tab {
-                Tab::Unstaged => format!(" Unstaged ({}) ", diff.files.len()),
-                Tab::Staged => format!(" Staged ({}) ", diff.files.len()),
+            Mode::Classic => match app.side {
+                Side::Unstaged => format!(" Unstaged ({}) ", app.entries.len()),
+                Side::Staged => format!(" Staged ({}) ", app.entries.len()),
             },
             Mode::Split => format!(" Files ({}) ", app.entries.len()),
         };
@@ -135,23 +134,20 @@ fn render_files(frame: &mut Frame, app: &mut App, area: Rect) {
                     ]))
                 }
                 Node::File { file_idx, depth } => {
-                    let name = match app.mode {
-                        Mode::Classic => diff.files[*file_idx].path.rsplit('/').next().unwrap_or("").to_string(),
-                        Mode::Split => app.entries[*file_idx]
-                            .path
-                            .rsplit('/')
-                            .next()
-                            .unwrap_or("")
-                            .to_string(),
-                    };
+                    let entry = &app.entries[*file_idx];
+                    let name = entry.path.rsplit('/').next().unwrap_or("").to_string();
                     let mut spans = vec![Span::raw("  ".repeat(*depth))];
                     match app.mode {
                         Mode::Classic => {
-                            let (letter, color) = status_badge(diff.files[*file_idx].status);
-                            spans.push(Span::styled(format!("{letter} "), Style::new().fg(color)));
+                            let file = app
+                                .selected_file_index_in(app.side)
+                                .and_then(|i| app.diff_of(app.side).files.get(i));
+                            if let Some(file) = file {
+                                let (letter, color) = status_badge(file.status);
+                                spans.push(Span::styled(format!("{letter} "), Style::new().fg(color)));
+                            }
                         }
                         Mode::Split => {
-                            let entry = &app.entries[*file_idx];
                             let staged = entry.staged.and_then(|i| app.staged.files.get(i));
                             let unstaged = entry.unstaged.and_then(|i| app.unstaged.files.get(i));
                             spans.extend(merge_badge(staged, unstaged));
@@ -183,7 +179,7 @@ fn render_files(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_stateful_widget(list, area, &mut app.files_state);
 }
 
-fn render_diff(frame: &mut Frame, app: &App, area: Rect, side: Tab) {
+fn render_diff(frame: &mut Frame, app: &App, area: Rect, side: Side) {
     let title = match app.mode {
         Mode::Classic => match app.selected_node() {
             Some(Node::File { .. }) => app
@@ -195,13 +191,15 @@ fn render_diff(frame: &mut Frame, app: &App, area: Rect, side: Tab) {
             None => " diff ".into(),
         },
         Mode::Split => match side {
-            Tab::Staged => format!(" Staged ({}) ", app.staged.files.len()),
-            Tab::Unstaged => format!(" Unstaged ({}) ", app.unstaged.files.len()),
+            Side::Staged => format!(" Staged ({}) ", app.staged.files.len()),
+            Side::Unstaged => format!(" Unstaged ({}) ", app.unstaged.files.len()),
         },
     };
-    let focused = app.focus == Focus::Diff && app.tab == side;
+    let focused = app.focus == Focus::Diff && app.side == side;
     let block = pane_block(title, focused);
 
+    let pane = app.pane_of(side);
+    let selection = app.selection_range_for(side);
     let lines: Vec<Line> = app
         .display_lines_for(side)
         .iter()
@@ -217,8 +215,7 @@ fn render_diff(frame: &mut Frame, app: &App, area: Rect, side: Tab) {
             // terminal, where it would reset the cursor column.
             let text = format!("{prefix}{}", line.content.trim_end_matches('\r'));
             let mut style = style_for(line.kind);
-            let pane = app.pane_of(side);
-            let in_selection = app.selection_range_for(side).is_some_and(|r| r.contains(&i));
+            let in_selection = selection.as_ref().is_some_and(|r| r.contains(&i));
             if in_selection || i == pane.cursor {
                 style = style.bg(Color::DarkGray);
                 if line.kind == LineKind::Meta {
@@ -247,16 +244,14 @@ fn render_diff(frame: &mut Frame, app: &App, area: Rect, side: Tab) {
 }
 
 fn status_bar(app: &App) -> Paragraph<'static> {
-    let diff = app.current_diff();
-    let tab_name = match app.tab {
-        Tab::Unstaged => "unstaged",
-        Tab::Staged => "staged",
+    let side_name = match app.side {
+        Side::Unstaged => "unstaged",
+        Side::Staged => "staged",
     };
     let selection = match app.selected_node() {
-        Some(Node::File { file_idx, .. }) => match app.mode {
-            Mode::Classic => format!("file {}/{}", file_idx + 1, diff.files.len()),
-            Mode::Split => format!("file {}/{}", file_idx + 1, app.entries.len()),
-        },
+        Some(Node::File { file_idx, .. }) => {
+            format!("file {}/{}", file_idx + 1, app.entries.len())
+        }
         Some(Node::Dir { file_count, .. }) => format!("dir ({file_count} file(s))"),
         None => "file 0/0".to_string(),
     };
@@ -279,7 +274,7 @@ fn status_bar(app: &App) -> Paragraph<'static> {
         .map(|i| format!(" · hunk {}/{}", i + 1, displayed.len()))
         .unwrap_or_default();
     let left = Span::styled(
-        format!(" {tab_name} · {selection}{hunk_pos} "),
+        format!(" {side_name} · {selection}{hunk_pos} "),
         Style::new().fg(Color::Black).bg(Color::Gray),
     );
 
@@ -294,9 +289,9 @@ fn status_bar(app: &App) -> Paragraph<'static> {
             Style::new().fg(Color::Yellow),
         )
     } else if let Some(range) = app.selection_range() {
-        let verb = match app.tab {
-            Tab::Unstaged => "s stage",
-            Tab::Staged => "u unstage",
+        let verb = match app.side {
+            Side::Unstaged => "s stage",
+            Side::Staged => "u unstage",
         };
         Span::styled(
             format!(
@@ -315,17 +310,17 @@ fn status_bar(app: &App) -> Paragraph<'static> {
 }
 
 fn hints(app: &App) -> &'static str {
-    match (app.focus, app.tab) {
-        (Focus::Files, Tab::Unstaged) => {
+    match (app.focus, app.side) {
+        (Focus::Files, Side::Unstaged) => {
             " Tab · j/k · space stage · d discard · h/l · m layout · c commit · q quit "
         }
-        (Focus::Files, Tab::Staged) => {
+        (Focus::Files, Side::Staged) => {
             " Tab · j/k · space unstage · d discard · h/l · m layout · c commit · q quit "
         }
-        (Focus::Diff, Tab::Unstaged) => {
+        (Focus::Diff, Side::Unstaged) => {
             " j/k change · n/p hunk · v select · s stage · d discard · m layout · c commit · q quit "
         }
-        (Focus::Diff, Tab::Staged) => {
+        (Focus::Diff, Side::Staged) => {
             " j/k change · n/p hunk · v select · u unstage · d discard · m layout · c commit · q quit "
         }
     }
@@ -523,9 +518,11 @@ mod tests {
         app.discard_confirm = Some(DiscardPrompt {
             what: "hunk 1 of a.txt".into(),
             action: DiscardAction::Hunk {
-                file_idx: 0,
-                hunk_idx: 0,
-                staged: false,
+                hunk: crate::diff::HunkId {
+                    file_idx: 0,
+                    hunk_idx: 0
+                },
+                side: Side::Unstaged,
             },
         });
         let (screen, _) = render_app(&mut app, 80, 10);
