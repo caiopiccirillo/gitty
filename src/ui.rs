@@ -159,7 +159,10 @@ fn render_files(frame: &mut Frame, app: &mut App, area: Rect) {
                             };
                             if let Some(file) = file {
                                 let (letter, color) = status_badge(file.status);
-                                spans.push(Span::styled(format!("{letter} "), Style::new().fg(color)));
+                                spans.push(Span::styled(
+                                    format!("{letter} "),
+                                    Style::new().fg(color),
+                                ));
                             }
                         }
                         Mode::Split => {
@@ -215,6 +218,7 @@ fn render_diff(frame: &mut Frame, app: &App, area: Rect, side: Side) {
 
     let pane = app.pane_of(side);
     let selection = app.selection_range_for(side);
+    #[cfg(feature = "syntax")]
     let file_path = app
         .selected_file_index_in(side)
         .and_then(|i| app.diff_of(side).files.get(i))
@@ -249,32 +253,34 @@ fn render_diff(frame: &mut Frame, app: &App, area: Rect, side: Side) {
                 _ => "",
             };
             push(prefix, line_style);
-            match file_path
-                .as_deref()
-                .and_then(crate::syntax::language_of)
+            #[cfg(feature = "syntax")]
             {
-                Some(language)
-                    if matches!(
-                        line.kind,
-                        LineKind::Context | LineKind::Addition | LineKind::Deletion
-                    ) =>
-                {
-                    // Color the code tokens, keeping the base style for
-                    // everything between them.
-                    let mut covered = 0;
-                    for (start, end, color) in crate::syntax::highlight(language, content) {
-                        if start > covered {
-                            push(&content[covered..start], line_style);
+                match file_path.as_deref().and_then(crate::syntax::language_of) {
+                    Some(language)
+                        if matches!(
+                            line.kind,
+                            LineKind::Context | LineKind::Addition | LineKind::Deletion
+                        ) =>
+                    {
+                        // Color the code tokens, keeping the base style for
+                        // everything between them.
+                        let mut covered = 0;
+                        for (start, end, color) in crate::syntax::highlight(language, content) {
+                            if start > covered {
+                                push(&content[covered..start], line_style);
+                            }
+                            push(&content[start..end], line_style.fg(color));
+                            covered = end;
                         }
-                        push(&content[start..end], line_style.fg(color));
-                        covered = end;
+                        if covered < content.len() {
+                            push(&content[covered..], line_style);
+                        }
                     }
-                    if covered < content.len() {
-                        push(&content[covered..], line_style);
-                    }
+                    _ => push(content, line_style),
                 }
-                _ => push(content, line_style),
             }
+            #[cfg(not(feature = "syntax"))]
+            push(content, line_style);
             Line::from(spans)
         })
         .collect();
@@ -595,7 +601,7 @@ mod tests {
             action: DiscardAction::Hunk {
                 hunk: crate::diff::HunkId {
                     file_idx: 0,
-                    hunk_idx: 0
+                    hunk_idx: 0,
                 },
                 side: Side::Unstaged,
             },
@@ -639,6 +645,7 @@ mod tests {
         assert!(Position::new(60, 4).y > 0);
     }
 
+    #[cfg(feature = "syntax")]
     #[test]
     fn syntax_colors_diff_lines() {
         let line =
@@ -650,7 +657,12 @@ mod tests {
             };
         let view = DiffView {
             lines: vec![
-                line(LineKind::FileHeader, 0, None, "diff --git a/main.rs b/main.rs"),
+                line(
+                    LineKind::FileHeader,
+                    0,
+                    None,
+                    "diff --git a/main.rs b/main.rs",
+                ),
                 line(LineKind::HunkHeader, 0, Some(0), "@@ -1 +1 @@"),
                 line(LineKind::Addition, 0, Some(0), "let x = 5;"),
             ],
@@ -663,11 +675,11 @@ mod tests {
         let (_, buffer) = render_app(&mut app, 80, 10);
         // The addition line is the third row (border, @@, then the line).
         let row = 2u16;
-        let text: String = (0..80).map(|x| buffer[(x, row)].symbol().to_string()).collect();
+        let text: String = (0..80)
+            .map(|x| buffer[(x, row)].symbol().to_string())
+            .collect();
         assert!(text.contains("+let x = 5;"));
-        let has_fg = |color: Color| {
-            (0..80).any(|x| buffer[(x, row)].style().fg == Some(color))
-        };
+        let has_fg = |color: Color| (0..80).any(|x| buffer[(x, row)].style().fg == Some(color));
         assert!(has_fg(Color::Cyan), "the `let` keyword is cyan");
         assert!(has_fg(Color::Magenta), "the `5` number is magenta");
     }
@@ -705,17 +717,27 @@ mod tests {
         app.set_viewport_height(8);
         let (screen, _) = render_app(&mut app, 120, 10);
         assert!(screen.contains("Unstaged (2)"));
-        assert!(!screen.contains("Staged ("), "staged pane hidden when empty");
+        assert!(
+            !screen.contains("Staged ("),
+            "staged pane hidden when empty"
+        );
 
         // Only staged changes: the unstaged pane is hidden.
         let mut app = App::new(DiffView::default(), sample_view(), PathBuf::from("/unused"));
         app.toggle_mode();
         let (screen, _) = render_app(&mut app, 120, 10);
         assert!(screen.contains("Staged (2)"));
-        assert!(!screen.contains("Unstaged ("), "unstaged pane hidden when empty");
+        assert!(
+            !screen.contains("Unstaged ("),
+            "unstaged pane hidden when empty"
+        );
 
         // Neither side has changes: only the files pane remains.
-        let mut app = App::new(DiffView::default(), DiffView::default(), PathBuf::from("/unused"));
+        let mut app = App::new(
+            DiffView::default(),
+            DiffView::default(),
+            PathBuf::from("/unused"),
+        );
         app.toggle_mode();
         let (screen, _) = render_app(&mut app, 120, 10);
         assert!(screen.contains("no changes"));

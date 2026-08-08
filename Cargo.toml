@@ -7,10 +7,20 @@ edition = "2024"
 anyhow = "1.0.104"
 gix = { version = "0.86", default-features = false, features = ["status", "sha1"] }
 ratatui = "0.30.2"
-tree-sitter = "0.25"
-tree-sitter-json = "0.24"
-tree-sitter-python = "0.23"
-tree-sitter-rust = "0.24"
+tree-sitter = { version = "0.25", optional = true }
+tree-sitter-json = { version = "0.24", optional = true }
+tree-sitter-python = { version = "0.23", optional = true }
+tree-sitter-rust = { version = "0.24", optional = true }
+
+[features]
+# Tree-sitter syntax highlighting for code shown in diffs. Off by default
+# to keep the build light (the grammars are compiled from C).
+syntax = [
+    "dep:tree-sitter",
+    "dep:tree-sitter-json",
+    "dep:tree-sitter-python",
+    "dep:tree-sitter-rust",
+]
 
 [dev-dependencies]
 git2 = "0.21.0"

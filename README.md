@@ -25,8 +25,9 @@ binary and no C toolchain at build time.
   visual selection mode.
 - Discard unwanted changes (hunks, lines, files or directories) with a
   confirmation prompt before anything is reverted.
-- Syntax highlighting with tree-sitter for Rust, Python and JSON code shown
-  in diffs (keywords, strings, comments, numbers and types are colored).
+- Optional tree-sitter syntax highlighting for Rust, Python and JSON code
+  shown in diffs (keywords, strings, comments, numbers and types are
+  colored). Off by default; build with `--features syntax` to enable it.
 - Mouse support: click a file to select it, click a diff line to jump the
   cursor to the nearest change, and scroll with the wheel.
 - Commit the staged changes from an integrated message box.
