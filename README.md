@@ -8,10 +8,6 @@ single lines without leaving the terminal. It is written in Rust on top of
 [gitoxide](https://github.com/gitoxideLabs/gitoxide), so it needs no `git`
 binary and no C toolchain at build time.
 
-![gitty screenshot](docs/screenshot.png)
-
-<!-- Add a screenshot at docs/screenshot.png and it will appear above. -->
-
 ## Features
 
 - Two layouts, switchable with one key: the classic single diff pane, or a

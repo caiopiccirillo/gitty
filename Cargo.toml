@@ -2,6 +2,13 @@
 name = "gitty"
 version = "0.3.0"
 edition = "2024"
+description = "A terminal user interface for reviewing and staging git changes"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/caiopiccirillo/gitty"
+rust-version = "1.85"
+keywords = ["git", "tui", "terminal", "staging", "diff"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 anyhow = "1.0.104"
