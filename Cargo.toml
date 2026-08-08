@@ -25,3 +25,8 @@ syntax = [
 [dev-dependencies]
 git2 = "0.21.0"
 tempfile = "3.27.0"
+
+[lints.clippy]
+all = "warn"       # Default rules
+pedantic = "warn"  # Strict rules
+# nursery = "warn"   # Experimental rules
