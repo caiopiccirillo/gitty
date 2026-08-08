@@ -22,12 +22,16 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)])
                     .areas(main_area);
             app.set_viewport_height(diff_area.height.saturating_sub(2) as usize);
+            app.files_rect = files_area;
+            app.diff_rects = [None; 2];
+            app.diff_rects[app.side.index()] = Some(diff_area);
             render_files(frame, app, files_area);
             render_diff(frame, app, diff_area, app.side);
         }
         Mode::Split => {
             let has_unstaged = !app.unstaged.files.is_empty();
             let has_staged = !app.staged.files.is_empty();
+            app.diff_rects = [None; 2];
             match (has_unstaged, has_staged) {
                 // The unstaged pane sits between the files and the staged
                 // pane, mirroring the stage workflow left to right.
@@ -39,6 +43,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                     ])
                     .areas(main_area);
                     app.set_viewport_height(unstaged_area.height.saturating_sub(2) as usize);
+                    app.files_rect = files_area;
+                    app.diff_rects[Side::Unstaged.index()] = Some(unstaged_area);
+                    app.diff_rects[Side::Staged.index()] = Some(staged_area);
                     render_files(frame, app, files_area);
                     render_diff(frame, app, unstaged_area, Side::Unstaged);
                     render_diff(frame, app, staged_area, Side::Staged);
@@ -52,6 +59,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 }
                 (false, false) => {
                     app.set_viewport_height(0);
+                    app.files_rect = main_area;
                     render_files(frame, app, main_area);
                 }
             }
@@ -69,6 +77,8 @@ fn render_split_side(frame: &mut Frame, app: &mut App, main_area: Rect, side: Si
         Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)])
             .areas(main_area);
     app.set_viewport_height(diff_area.height.saturating_sub(2) as usize);
+    app.files_rect = files_area;
+    app.diff_rects[side.index()] = Some(diff_area);
     render_files(frame, app, files_area);
     render_diff(frame, app, diff_area, side);
 }
@@ -205,34 +215,67 @@ fn render_diff(frame: &mut Frame, app: &App, area: Rect, side: Side) {
 
     let pane = app.pane_of(side);
     let selection = app.selection_range_for(side);
+    let file_path = app
+        .selected_file_index_in(side)
+        .and_then(|i| app.diff_of(side).files.get(i))
+        .map(|f| f.path.clone());
     let lines: Vec<Line> = app
         .display_lines_for(side)
         .iter()
         .enumerate()
         .map(|(i, line)| {
+            let content = line.content.trim_end_matches('\r');
+            let line_style = style_for(line.kind);
+            let selected = selection.as_ref().is_some_and(|r| r.contains(&i)) || i == pane.cursor;
+            let mut spans: Vec<Span> = Vec::new();
+            let mut push = |text: &str, mut style: Style| {
+                if selected {
+                    style = style.bg(Color::DarkGray);
+                    if line.kind == LineKind::Meta {
+                        // DarkGray on DarkGray would be unreadable.
+                        style = style.fg(Color::Gray);
+                    }
+                }
+                if i == pane.cursor && pane.visual_anchor.is_some() {
+                    // While selecting, the cursor end is a shade lighter.
+                    style = style.bg(Color::Gray);
+                }
+                spans.push(Span::styled(text.to_string(), style));
+            };
             let prefix = match line.kind {
                 LineKind::Addition => "+",
                 LineKind::Deletion => "-",
                 LineKind::Context => " ",
                 _ => "",
             };
-            // CR of CRLF files is kept in the model but must not reach the
-            // terminal, where it would reset the cursor column.
-            let text = format!("{prefix}{}", line.content.trim_end_matches('\r'));
-            let mut style = style_for(line.kind);
-            let in_selection = selection.as_ref().is_some_and(|r| r.contains(&i));
-            if in_selection || i == pane.cursor {
-                style = style.bg(Color::DarkGray);
-                if line.kind == LineKind::Meta {
-                    // DarkGray on DarkGray would be unreadable.
-                    style = style.fg(Color::Gray);
+            push(prefix, line_style);
+            match file_path
+                .as_deref()
+                .and_then(crate::syntax::language_of)
+            {
+                Some(language)
+                    if matches!(
+                        line.kind,
+                        LineKind::Context | LineKind::Addition | LineKind::Deletion
+                    ) =>
+                {
+                    // Color the code tokens, keeping the base style for
+                    // everything between them.
+                    let mut covered = 0;
+                    for (start, end, color) in crate::syntax::highlight(language, content) {
+                        if start > covered {
+                            push(&content[covered..start], line_style);
+                        }
+                        push(&content[start..end], line_style.fg(color));
+                        covered = end;
+                    }
+                    if covered < content.len() {
+                        push(&content[covered..], line_style);
+                    }
                 }
+                _ => push(content, line_style),
             }
-            if i == pane.cursor && pane.visual_anchor.is_some() {
-                // While selecting, the cursor end is a shade lighter.
-                style = style.bg(Color::Gray);
-            }
-            Line::styled(text, style)
+            Line::from(spans)
         })
         .collect();
 
@@ -561,6 +604,72 @@ mod tests {
         assert!(screen.contains("discard hunk 1 of a.txt?"));
         assert!(screen.contains("y confirm"));
         assert!(screen.contains("n cancel"));
+    }
+
+    #[test]
+    fn mouse_events_work_end_to_end() {
+        use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        use ratatui::layout::Position;
+
+        let mut app = sample_app();
+        render_app(&mut app, 80, 10); // establishes the clickable areas
+
+        // Click the second file row (below the border).
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row: 2,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.selected_row, 1);
+        let (screen, _) = render_app(&mut app, 80, 10);
+        assert!(screen.contains("+beta1"), "b.txt diff shown");
+
+        // Click a diff line: the cursor snaps to the changed line there.
+        // b.txt displays [@@, +beta1, -beta2]; row 4 is the -beta2 line.
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 60,
+            row: 4,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.focus, Focus::Diff);
+        assert_eq!(app.cursor(), 2);
+        assert_eq!(app.side, Side::Unstaged);
+        assert!(Position::new(60, 4).y > 0);
+    }
+
+    #[test]
+    fn syntax_colors_diff_lines() {
+        let line =
+            |kind: LineKind, file_idx: usize, hunk_idx: Option<usize>, content: &str| DiffLine {
+                kind,
+                content: content.into(),
+                file_idx,
+                hunk_idx,
+            };
+        let view = DiffView {
+            lines: vec![
+                line(LineKind::FileHeader, 0, None, "diff --git a/main.rs b/main.rs"),
+                line(LineKind::HunkHeader, 0, Some(0), "@@ -1 +1 @@"),
+                line(LineKind::Addition, 0, Some(0), "let x = 5;"),
+            ],
+            files: vec![FileInfo {
+                path: "main.rs".into(),
+                status: FileStatus::Modified,
+            }],
+        };
+        let mut app = App::new(view, DiffView::default(), PathBuf::from("/unused"));
+        let (_, buffer) = render_app(&mut app, 80, 10);
+        // The addition line is the third row (border, @@, then the line).
+        let row = 2u16;
+        let text: String = (0..80).map(|x| buffer[(x, row)].symbol().to_string()).collect();
+        assert!(text.contains("+let x = 5;"));
+        let has_fg = |color: Color| {
+            (0..80).any(|x| buffer[(x, row)].style().fg == Some(color))
+        };
+        assert!(has_fg(Color::Cyan), "the `let` keyword is cyan");
+        assert!(has_fg(Color::Magenta), "the `5` number is magenta");
     }
 
     #[test]

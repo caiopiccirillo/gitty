@@ -4,7 +4,7 @@
 //! A hunk describes a region of the old content (index or HEAD) plus the
 //! lines that replace it in the new content (worktree or index). Staging a
 //! hunk writes the *old* content back to the index with the hunk region
-//! replaced by the new side — or, for partial staging, by only the selected
+//! replaced by the new side (or, for partial staging, by only the selected
 //! new lines (with unselected deletions kept as context). Unstaging works on
 //! the reverse diff (index vs. HEAD), where the roles of additions and
 //! deletions are swapped by the caller.
@@ -286,7 +286,7 @@ mod tests {
     /// even when the new side of the hunk would not imply one.
     #[test]
     fn unstage_keeps_index_trailing_newline_beyond_the_hunk() {
-        // index: "a\nB\nc\n", HEAD: "a\nb\nc" — the trailing newline was
+        // index: "a\nB\nc\n", HEAD: "a\nb\nc": the trailing newline was
         // removed by a staged change past this hunk.
         let index = b"a\nB\nc\n";
         let out = hunk(

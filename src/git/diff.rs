@@ -33,8 +33,8 @@ pub fn load_staged_diff(path: &Path) -> Result<DiffView> {
 }
 
 /// The workdir-vs-index diff with the options gitiff always uses (untracked
-/// files included, with their content), shared so that file/hunk indices
-/// are stable across calls.
+/// files included, with their content), shared so file/hunk indices stay
+/// stable across calls.
 pub(super) fn workdir_diff(repo: &gix::Repository) -> Result<Vec<FileDiff>> {
     let workdir = repo.workdir().context("repository has no worktree")?;
     let mut cache = repo.diff_resource_cache(
@@ -172,8 +172,8 @@ fn diff_blobs(
 }
 
 /// Compute the blob diff of one changed file of the unstaged diff, where the
-/// new side is read from the worktree. The status is known from the status
-/// walk (the worktree side has no blob id to classify from).
+/// new side is read from the worktree. The status comes from the status
+/// walk, since the worktree side has no blob id to classify from.
 fn diff_worktree(
     repo: &gix::Repository,
     cache: &mut gix::diff::blob::Platform,

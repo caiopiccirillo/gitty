@@ -8,8 +8,8 @@
 //!
 //! Two layouts are supported: the classic single diff pane (the focused
 //! side only) and a lazygit-style split with the staged and unstaged panes
-//! side by side. Each side keeps its own cursor state ([`PaneState`]) so
-//! moving the focus never loses your place.
+//! side by side. Each side keeps its own cursor state ([`PaneState`]),
+//! so switching the focused side leaves the other pane's cursor alone.
 
 mod input;
 
@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 
 use anyhow::Result;
+use ratatui::layout::Rect;
 use ratatui::widgets::ListState;
 
 use crate::diff::{DiffLine, DiffView, FileInfo, HunkId, LineKind, SelectedLines};
@@ -102,6 +103,9 @@ pub struct App {
     pub files_state: ListState,
     /// Per-side cursor state of the two diff panes.
     pub panes: [PaneState; 2],
+    /// Clickable areas of the last render, for mouse hit-testing.
+    pub files_rect: Rect,
+    pub diff_rects: [Option<Rect>; 2],
     /// The commit message being typed (`c`), if the commit box is open.
     pub commit_input: Option<CommitInput>,
     /// A destructive discard awaiting confirmation (`d` then `y`).
@@ -147,6 +151,8 @@ impl App {
             selected_row: 0,
             files_state: ListState::default().with_selected(Some(0)),
             panes: [PaneState::default(); 2],
+            files_rect: Rect::default(),
+            diff_rects: [None; 2],
             commit_input: None,
             discard_confirm: None,
             message: None,
@@ -318,7 +324,7 @@ impl App {
         self.snap_to_first_change();
     }
 
-    /// Hunk under the cursor — the target of stage/unstage.
+    /// The hunk under the cursor; the target of stage/unstage.
     pub fn current_hunk(&self) -> Option<HunkId> {
         let lines = self.display_lines();
         let line = lines.get(self.pane().cursor)?;
@@ -672,8 +678,8 @@ impl App {
         }
     }
 
-    /// Path-based identity of a tree row, so it can be re-found after a
-    /// refresh even if file indices shifted.
+    /// Path-based identity of a tree row, so a row can be found again
+    /// after a refresh even if file indices shifted.
     fn identity_of(&self, node: &Node) -> NodeIdentity {
         match node {
             Node::Dir { path, .. } => NodeIdentity::Dir(path.clone()),
@@ -829,7 +835,8 @@ fn file_display_lines(diff: &DiffView, file_idx: usize) -> Vec<&DiffLine> {
 mod tests {
     use super::*;
     use crate::diff::{FileStatus, two_file_view};
-    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::layout::Rect;
 
     /// Two files (1 hunk + 2 hunks), staged side empty.
     fn test_app() -> App {
@@ -1161,7 +1168,69 @@ mod tests {
         );
     }
 
-    /// src/app.rs, src/git/ops.rs, top.rs — one hunk each.
+    fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn mouse_click_selects_a_file_row() {
+        let mut app = test_app();
+        app.files_rect = Rect::new(0, 0, 24, 10);
+        // Row 0 sits below the block border (y = 1).
+        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 2));
+        assert_eq!(app.selected_row, 1);
+        assert_eq!(app.focus, Focus::Files);
+        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 1));
+        assert_eq!(app.selected_row, 0, "clicks on the border select nothing");
+    }
+
+    #[test]
+    fn mouse_click_focuses_and_positions_the_diff() {
+        let mut app = test_app();
+        app.files_rect = Rect::new(0, 0, 24, 10);
+        app.diff_rects[Side::Unstaged.index()] = Some(Rect::new(25, 0, 55, 10));
+        // a.txt's diff is [@@, +addition]: the changed line is at index 1.
+        // Clicking line 4 (display index 3) snaps the cursor to it.
+        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 60, 4));
+        assert_eq!(app.focus, Focus::Diff);
+        assert_eq!(app.side, Side::Unstaged);
+        assert_eq!(app.cursor(), 1);
+    }
+
+    #[test]
+    fn mouse_click_switches_to_the_other_pane() {
+        let mut app = split_app();
+        app.files_rect = Rect::new(0, 0, 30, 10);
+        app.diff_rects[Side::Unstaged.index()] = Some(Rect::new(31, 0, 40, 10));
+        app.diff_rects[Side::Staged.index()] = Some(Rect::new(71, 0, 40, 10));
+        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 80, 4));
+        assert_eq!(app.side, Side::Staged);
+        assert_eq!(app.focus, Focus::Diff);
+    }
+
+    #[test]
+    fn mouse_wheel_scrolls_the_area_under_the_cursor() {
+        let mut app = test_app();
+        app.files_rect = Rect::new(0, 0, 24, 10);
+        app.diff_rects[Side::Unstaged.index()] = Some(Rect::new(25, 0, 55, 10));
+        // Wheel down over the files pane moves the selection.
+        app.handle_mouse(mouse(MouseEventKind::ScrollDown, 5, 2));
+        assert_eq!(app.selected_row, 1);
+        app.handle_mouse(mouse(MouseEventKind::ScrollUp, 5, 2));
+        assert_eq!(app.selected_row, 0);
+        // Wheel down over the diff pane moves its cursor and focuses it.
+        app.handle_mouse(mouse(MouseEventKind::ScrollDown, 60, 4));
+        assert_eq!(app.focus, Focus::Diff);
+        assert_eq!(app.cursor(), 1);
+        assert_eq!(app.selected_row, 0, "files selection untouched");
+    }
+
+    /// src/app.rs, src/git/ops.rs, top.rs (one hunk each).
     fn nested_view() -> DiffView {
         let line = |kind: LineKind, file_idx: usize, hunk_idx: Option<usize>| DiffLine {
             kind,

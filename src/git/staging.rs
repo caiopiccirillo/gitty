@@ -256,9 +256,9 @@ pub fn discard_staged_file(path: &Path, file: &FileInfo) -> Result<()> {
     Ok(())
 }
 
-/// The worktree content after discarding the hunk region of `file`, which
-/// must be the reversed diff (worktree or index as the old side, the side to
-/// revert to as the new side). The selection decides which lines survive.
+/// The worktree content after discarding `hunk`'s region of `file`.
+/// `file` must be the reversed diff, whose new side holds what the region
+/// reverts to; the selection decides which lines survive.
 fn discard_content(file: &FileDiff, hunk: &Hunk, selection: &Selection<'_>) -> Result<Vec<u8>> {
     splice::hunk(
         &file.old_data,
@@ -409,7 +409,7 @@ pub fn stage_file(path: &Path, file: &FileInfo) -> Result<()> {
 }
 
 /// Unstage a whole file (like `git reset HEAD -- <path>`). On an unborn
-/// branch there is no HEAD entry to restore, so the index entry is simply
+/// branch there is no HEAD entry to restore, so the index entry is
 /// dropped and the file becomes untracked again.
 pub fn unstage_file(path: &Path, file: &FileInfo) -> Result<()> {
     let repo = open_repo(path)?;

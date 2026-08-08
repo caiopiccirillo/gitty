@@ -1,6 +1,9 @@
-//! Key handling and cursor/selection movement for [`App`].
+//! Key and mouse handling and cursor/selection movement for [`App`].
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{
+    KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
+use ratatui::layout::Position;
 
 use super::*;
 
@@ -27,6 +30,91 @@ impl App {
                 Focus::Diff => self.handle_diff_key(key),
             },
         }
+    }
+
+    /// Handle a mouse event against the last rendered layout.
+    pub fn handle_mouse(&mut self, event: MouseEvent) {
+        self.message = None;
+        let position = Position::new(event.column, event.row);
+        match event.kind {
+            MouseEventKind::Down(MouseButton::Left) => self.mouse_click(position),
+            MouseEventKind::ScrollUp => self.mouse_scroll(position, 1),
+            MouseEventKind::ScrollDown => self.mouse_scroll(position, -1),
+            _ => {}
+        }
+    }
+
+    /// The tree row under `position`, if the click hit the files list.
+    fn row_at(&self, position: Position) -> Option<usize> {
+        if !self.files_rect.contains(position) {
+            return None;
+        }
+        // The first inner row is below the block border; the list may be
+        // scrolled, so the visual row maps through the list's offset.
+        let visual = usize::from(position.y).checked_sub(usize::from(self.files_rect.y) + 1)?;
+        let row = visual + self.files_state.offset();
+        (row < self.tree.len()).then_some(row)
+    }
+
+    /// The diff pane under `position`, if any.
+    fn side_at(&self, position: Position) -> Option<Side> {
+        [Side::Unstaged, Side::Staged]
+            .into_iter()
+            .find(|&side| self.diff_rects[side.index()].is_some_and(|r| r.contains(position)))
+    }
+
+    fn mouse_click(&mut self, position: Position) {
+        if let Some(row) = self.row_at(position) {
+            self.focus = Focus::Files;
+            self.select_row(row);
+            return;
+        }
+        let Some(side) = self.side_at(position) else {
+            return;
+        };
+        self.side = side;
+        self.focus = Focus::Diff;
+        // Jump the cursor to the changed line nearest to the click.
+        let rect = self.diff_rects[side.index()].expect("found above");
+        let Some(y) = usize::from(position.y).checked_sub(usize::from(rect.y) + 1) else {
+            return;
+        };
+        self.snap_cursor_to_nearest(side, y + self.pane_of(side).scroll);
+    }
+
+    fn mouse_scroll(&mut self, position: Position, wheel_steps: isize) {
+        if self.row_at(position).is_some() {
+            self.focus = Focus::Files;
+            self.move_row(-wheel_steps);
+            return;
+        }
+        if let Some(side) = self.side_at(position) {
+            // Wheeling a diff pane scrolls it and brings it into focus.
+            self.side = side;
+            self.focus = Focus::Diff;
+            self.move_cursor_in(side, -wheel_steps);
+        }
+    }
+
+    /// Move the pane's cursor to the changed line nearest to `index`.
+    fn snap_cursor_to_nearest(&mut self, side: Side, index: usize) {
+        let positions = changed_positions(&self.display_lines_for(side));
+        if positions.is_empty() {
+            return;
+        }
+        let nearest = match positions.binary_search(&index) {
+            Ok(i) => positions[i],
+            Err(0) => positions[0],
+            Err(i) => {
+                let before = positions[i - 1];
+                match positions.get(i) {
+                    Some(&after) if index - before > after - index => after,
+                    _ => before,
+                }
+            }
+        };
+        self.pane_of_mut(side).cursor = nearest;
+        self.clamp_cursor_for(side);
     }
 
     /// Keys while the discard confirmation is open.
@@ -260,8 +348,8 @@ impl App {
             }
             // The split layout cycles the focus through the visible panes
             // (files, then the diff panes left to right), skipping sides
-            // whose pane is hidden. This way, Tab after staging lands in
-            // the staged pane where `u` unstages.
+            // whose pane is hidden, so after staging Tab lands in the
+            // staged pane where `u` unstages.
             Mode::Split => {
                 let visible: Vec<Side> = [Side::Unstaged, Side::Staged]
                     .into_iter()
@@ -440,14 +528,14 @@ impl App {
         }
     }
 
-    /// Keep the cursor of the focused pane inside the displayed lines and
-    /// scroll so it stays visible.
+    /// Clamp the focused pane's cursor to the displayed lines, scrolling
+    /// as needed to keep it visible.
     pub(super) fn clamp_cursor(&mut self) {
         self.clamp_cursor_for(self.side);
     }
 
-    /// Keep the cursor of `side` inside the displayed lines and scroll so
-    /// it stays visible.
+    /// Clamp the cursor of `side` to the displayed lines, scrolling as
+    /// needed to keep it visible.
     pub(super) fn clamp_cursor_for(&mut self, side: Side) {
         let (len, viewport) = {
             let lines = self.display_lines_for(side);

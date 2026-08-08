@@ -18,7 +18,15 @@ fn main() -> Result<()> {
     let mut app = App::load(&path)?;
 
     let mut terminal = ratatui::init();
+    ratatui::crossterm::execute!(
+        std::io::stdout(),
+        ratatui::crossterm::event::EnableMouseCapture
+    )?;
     let result = run(&mut terminal, &mut app);
+    let _ = ratatui::crossterm::execute!(
+        std::io::stdout(),
+        ratatui::crossterm::event::DisableMouseCapture
+    );
     ratatui::restore();
     result
 }
@@ -26,11 +34,12 @@ fn main() -> Result<()> {
 fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
     while !app.should_quit {
         terminal.draw(|frame| ui::render(frame, app))?;
-        if event::poll(TICK)?
-            && let Event::Key(key) = event::read()?
-            && key.kind == KeyEventKind::Press
-        {
-            app.handle_key(key);
+        if event::poll(TICK)? {
+            match event::read()? {
+                Event::Key(key) if key.kind == KeyEventKind::Press => app.handle_key(key),
+                Event::Mouse(mouse) => app.handle_mouse(mouse),
+                _ => {}
+            }
         }
         app.poll_refresh();
     }

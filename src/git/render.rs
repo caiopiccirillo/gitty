@@ -68,7 +68,7 @@ pub(super) fn diff_to_view(files: &[FileDiff]) -> DiffView {
 }
 
 /// The `@@ -a,b +c,d @@` line of a hunk (positions are 1-based already),
-/// with the section heading like `git`.
+/// plus the section heading, like `git`.
 fn hunk_header_line(hunk: &Hunk) -> String {
     let h = &hunk.header;
     let section = hunk

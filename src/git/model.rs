@@ -67,8 +67,8 @@ pub(super) struct Hunk {
     pub(super) lines: Vec<(DiffLineKind, Vec<u8>)>,
 }
 
-/// Swap a staged diff around so that the index is the old side, making the
-/// hunk material directly applicable to the index.
+/// Reverse a staged diff: the index becomes the old side, so the same
+/// splice logic can be applied to it unchanged.
 pub(super) fn reversed(file: &FileDiff) -> FileDiff {
     let mut reversed = FileDiff {
         path: file.path.clone(),

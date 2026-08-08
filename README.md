@@ -18,13 +18,17 @@ binary and no C toolchain at build time.
   lazygit-style split with the staged and unstaged panes side by side.
 - Unstaged and staged diff views, switchable with one key.
 - A collapsible file tree with status badges (added, modified, deleted,
-  type change, untracked) — in the split layout the tree merges both sides
+  type change, untracked); in the split layout the tree merges both sides
   and rows carry two-letter badges like `MM` or `??`.
 - Stage or unstage entire files and directories.
 - Stage or unstage individual hunks, or just the lines you select with the
   visual selection mode.
-- Discard unwanted changes — hunks, lines, files or directories — with a
+- Discard unwanted changes (hunks, lines, files or directories) with a
   confirmation prompt before anything is reverted.
+- Syntax highlighting with tree-sitter for Rust, Python and JSON code shown
+  in diffs (keywords, strings, comments, numbers and types are colored).
+- Mouse support: click a file to select it, click a diff line to jump the
+  cursor to the nearest change, and scroll with the wheel.
 - Commit the staged changes from an integrated message box.
 - The diff refreshes automatically when the repository changes on disk,
   computed on a background thread so the interface stays responsive.
@@ -64,15 +68,15 @@ hunk under the cursor.
 
 Two layouts are available, toggled with `m`:
 
-- **Classic** — one diff pane at a time; `Tab` switches between the staged
+- **Classic**: one diff pane at a time; `Tab` switches between the staged
   and unstaged views.
-- **Split** — the unstaged pane in the middle with the staged pane to its
+- **Split**: the unstaged pane in the middle with the staged pane to its
   right, sharing one file tree that merges both sides (`MM` means the file
   has both staged and unstaged changes). Panes with nothing to show are
   hidden, so the split collapses to `Files | Unstaged` while you stage and
   back to `Files | Staged` once everything is staged. `Tab` cycles the
   focus through the visible panes (files first, then left to right),
-  skipping hidden ones — so after staging, `Tab` lands in the staged pane
+  skipping hidden ones, so after staging `Tab` lands in the staged pane
   where `u` unstages. Each pane keeps its own cursor. In the files pane,
   `Space` acts like lazygit: stage the selected file or directory, and
   press it again to unstage. The `s`/`u`/`d` diff keys act on the focused
@@ -122,7 +126,7 @@ Files pane:
 | `Enter` on a file       | Open the file's diff                     |
 | `l` / `→`               | Expand a collapsed directory, open a file|
 | `h` / `←`               | Collapse a directory, move to its parent |
-| `Space`                 | Classic: stage/unstage the selected file or directory. Split: toggle it — stage if it has unstaged changes, otherwise unstage |
+| `Space`                 | Classic: stage/unstage the selected file or directory. Split: toggle it (stage if it has unstaged changes, otherwise unstage) |
 | `d`                     | Discard the selected file or directory (asks for confirmation) |
 
 Diff pane:
@@ -145,8 +149,16 @@ The cursor moves between changed lines only (`+`/`-`), and when you open a
 file it lands on its first change. A visual selection (`v`) cannot leave its
 hunk, so it always maps to a single, well-formed patch.
 
-Discarding reverts changes you no longer want: on the unstaged tab a hunk or
-file is restored to the index version, on the staged tab to the `HEAD`
+### Mouse
+
+- Click a file row to select it.
+- Click inside a diff pane to focus it and jump the cursor to the nearest
+  changed line.
+- Scroll the wheel over the files pane to move the selection, or over a
+  diff pane to scroll it (the pane under the wheel gains focus).
+
+Discarding reverts changes you no longer want: on the unstaged side a hunk or
+file is restored to the index version, on the staged side to the `HEAD`
 version (removing an untracked or newly added file entirely). It is
 destructive, so gitiff always asks for confirmation (`y`/`n`) first.
 
@@ -178,6 +190,6 @@ cargo test
 One design note for contributors: gitoxide does not implement patch
 application (`git apply`), so hunk and line staging does not build patch
 text and apply it to the index. Instead, the new index blob content is
-reconstructed directly from the hunk's raw material — see
+reconstructed directly from the hunk's raw material (see
 `src/git/splice.rs`. Unit tests for that logic live in the same file, and
 the integration tests in `tests/staging.rs` cover the full flows.
