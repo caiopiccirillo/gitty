@@ -9,7 +9,7 @@ use ratatui::crossterm::event::{
 };
 use ratatui::layout::Position;
 
-use super::{App, Focus, Side, Mode, Node, tree, Range, LineKind, DiffLine};
+use super::{App, DiffLine, Focus, LineKind, Mode, Node, Range, Side, tree};
 
 impl App {
     pub fn handle_key(&mut self, key: KeyEvent) {

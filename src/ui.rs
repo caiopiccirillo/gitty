@@ -106,7 +106,10 @@ fn render_commit_box(frame: &mut Frame, input: &CommitInput) {
     let start = (cursor + 1).saturating_sub(visible);
     let text: String = chars.iter().skip(start).take(visible).collect();
     frame.render_widget(Paragraph::new(text), inner);
-    frame.set_cursor_position((inner.x + u16::try_from(cursor - start).unwrap_or(u16::MAX), inner.y));
+    frame.set_cursor_position((
+        inner.x + u16::try_from(cursor - start).unwrap_or(u16::MAX),
+        inner.y,
+    ));
 }
 
 fn render_files(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -202,7 +205,8 @@ fn render_diff(frame: &mut Frame, app: &App, area: Rect, side: Side) {
         Mode::Classic => match app.selected_node() {
             Some(Node::File { .. }) => app
                 .selected_file_index_in(side)
-                .and_then(|idx| app.diff_of(side).files.get(idx)).map_or_else(|| " diff ".into(), |file| format!(" {} ", file.path)),
+                .and_then(|idx| app.diff_of(side).files.get(idx))
+                .map_or_else(|| " diff ".into(), |file| format!(" {} ", file.path)),
             Some(Node::Dir { path, .. }) => format!(" {path}/ "),
             None => " diff ".into(),
         },
@@ -473,7 +477,11 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|frame| render(frame, app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
-        let screen = buffer.content().iter().map(ratatui::buffer::Cell::symbol).collect();
+        let screen = buffer
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect();
         (screen, buffer)
     }
 

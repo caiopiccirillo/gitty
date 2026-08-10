@@ -421,8 +421,7 @@ pub fn stage_file(path: &Path, file: &FileInfo) -> Result<()> {
             (gix::path::into_bstr(full.read_link()?).to_vec(), true)
         } else {
             (
-                std::fs::read(&full)
-                    .with_context(|| format!("cannot read {}", full.display()))?,
+                std::fs::read(&full).with_context(|| format!("cannot read {}", full.display()))?,
                 false,
             )
         };
