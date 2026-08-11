@@ -34,3 +34,13 @@ jobs:
 
       - name: Test (syntax feature)
         run: cargo test --features syntax
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: peaceiris/actions-mdbook@v2
+
+      - name: Build the book
+        run: mdbook build
