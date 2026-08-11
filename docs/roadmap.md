@@ -18,6 +18,24 @@ Two constraints shape the plan:
   into lazygit. Things that belong to the shell or to other tools are
   listed as out of scope.
 
+## Feasibility, verified
+
+The feasibility claims below were checked against the installed `gix`
+0.86.0 source and crates.io:
+
+- `push`: only URL configuration builders exist, no push implementation.
+  Blocked.
+- `fetch`: fully implemented in `gix::remote`; the work is UI (progress,
+  remote selection), not plumbing.
+- Commit log: `Repository::rev_walk` provides the traversal.
+- Branch checkout: available via `gix-worktree-state`, which requires
+  enabling the `worktree-mutation` feature at build time.
+- Merge: three-way blob, tree and commit merge exist in `gix::merge`.
+- Blame: early plumbing, expected to be rough.
+- Stash, apply, rebase, cherry-pick, hooks, bisect: the corresponding
+  crates are unpublished or placeholder (`gix-rebase`, `gix-sequencer` are
+  published only as `0.0.0`). Blocked.
+
 ## What gitty already covers
 
 - Working tree review: unstaged and staged diffs, untracked files, file
@@ -62,10 +80,10 @@ With history visible, branches become actionable.
 
 | Item | Why | Effort |
 | ---- | --- | ------ |
-| Branches view: list, current marker, create, rename, delete, checkout | `git switch`/`git branch` from the TUI; checkout is feasible via gitoxide's worktree state | L |
+| Branches view: list, current marker, create, rename, delete, checkout | `git switch`/`git branch` from the TUI; checkout is feasible via gitoxide's worktree state (needs the `worktree-mutation` build feature) | L |
 | Diff a branch against HEAD | See what merging a branch would bring | S |
 | Tags: list, create, delete (lightweight) | Part of the release flow | S |
-| `git fetch` with progress | gitoxide supports fetch; pushes do not exist yet | L |
+| `git fetch` with progress | gitoxide's fetch implementation is complete; the work is UI and remote selection | M |
 | Reflog view | Needed later for undo | M |
 | `push` | **blocked**: gitoxide has no push | - |
 
@@ -79,7 +97,7 @@ kept, and surviving merge conflicts.
 | Stash: push, list, apply, pop, drop | The standard "park my work" workflow; implementable by hand on gitoxide (snapshot worktree and index into a commit on `refs/stash`) | L |
 | Reset menu: soft, mixed, hard | gitty already has the pieces (discard and unstage); expose the full matrix | M |
 | Merge with conflict resolution | gitoxide has three-way blob and tree merge; navigating and resolving conflicts in the TUI is the hard part | L |
-| Cherry-pick | **blocked** for now: no sequencer in gitoxide (a manual diff-and-apply version is possible but fragile) | L |
+| Cherry-pick | **blocked**: no sequencer in gitoxide (`gix-cherry-pick` is unpublished); a manual diff-and-apply version is possible but fragile | L |
 
 ## Phase 4: Stretch goals
 
