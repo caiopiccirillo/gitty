@@ -9,4 +9,5 @@
 - [Mouse](./mouse.md)
 - [Syntax highlighting](./syntax.md)
 - [Status and comparison](./status.md)
+- [Roadmap](./roadmap.md)
 - [Development](./development.md)
