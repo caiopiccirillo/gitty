@@ -1,0 +1,12 @@
+[book]
+title = "gitty"
+description = "A terminal user interface for reviewing and staging git changes"
+authors = ["Caio Piccirillo"]
+language = "en"
+src = "docs"
+
+[build]
+build-dir = "book"
+
+[output.html]
+git-repository-url = "https://github.com/caiopiccirillo/gitty"
