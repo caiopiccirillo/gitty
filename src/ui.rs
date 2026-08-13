@@ -390,12 +390,26 @@ fn hints(app: &App) -> &'static str {
 }
 
 fn pane_block(title: String, focused: bool) -> Block<'static> {
-    let border = if focused {
-        Style::new().fg(Color::White)
+    // The focused pane is marked by a bold, reversed title in addition to
+    // the border color, so focus is recognizable on terminals where the
+    // white/dark-gray contrast is hard to tell apart.
+    let (border, title_style) = if focused {
+        (
+            Style::new().fg(Color::White),
+            Style::new()
+                .fg(Color::Black)
+                .bg(Color::Gray)
+                .add_modifier(Modifier::BOLD),
+        )
     } else {
-        Style::new().fg(Color::DarkGray)
+        (
+            Style::new().fg(Color::DarkGray),
+            Style::new().fg(Color::DarkGray),
+        )
     };
-    Block::bordered().title(title).border_style(border)
+    Block::bordered()
+        .title(Line::from(Span::styled(title, title_style)))
+        .border_style(border)
 }
 
 fn status_badge(status: FileStatus) -> (&'static str, Color) {
@@ -910,5 +924,20 @@ mod tests {
                 .is_some_and(|m| m.text.starts_with("stage failed:")),
             "the next operation overwrites it"
         );
+    }
+
+    #[test]
+    fn focused_pane_title_is_reversed() {
+        let mut app = sample_app();
+        let (_, buffer) = render_app(&mut app, 80, 10);
+        // Files focused: the files title (x=1) is reversed, the diff
+        // title (x=25) is not.
+        assert_eq!(buffer[(1, 0)].bg, Color::Gray);
+        assert_ne!(buffer[(25, 0)].bg, Color::Gray);
+
+        press(&mut app, KeyCode::Enter);
+        let (_, buffer) = render_app(&mut app, 80, 10);
+        assert_ne!(buffer[(1, 0)].bg, Color::Gray);
+        assert_eq!(buffer[(25, 0)].bg, Color::Gray, "diff title reversed");
     }
 }
