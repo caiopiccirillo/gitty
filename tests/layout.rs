@@ -52,6 +52,7 @@ fn split_mode_stages_from_the_unstaged_pane_and_unstages_from_the_staged_pane() 
     // Open f.txt's diff and stage its hunk from the unstaged pane.
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Char('s'));
+    app.wait_for_refresh();
     assert_success(&app);
     assert_eq!(app.staged.hunks().len(), 1, "hunk staged");
     assert_eq!(app.unstaged.files.len(), 1, "only g.txt left unstaged");
@@ -71,6 +72,7 @@ fn split_mode_stages_from_the_unstaged_pane_and_unstages_from_the_staged_pane() 
             .any(|l| l.content == "L1")
     );
     press(&mut app, KeyCode::Char('u'));
+    app.wait_for_refresh();
     assert_success(&app);
     assert!(load_staged_diff(dir.path()).unwrap().files.is_empty());
     assert_eq!(load_unstaged_diff(dir.path()).unwrap().files.len(), 2);
@@ -84,6 +86,7 @@ fn split_mode_keeps_the_selection_when_switching_panes() {
 
     // Stage f.txt so the staged pane has content.
     press(&mut app, KeyCode::Char(' '));
+    app.wait_for_refresh();
     assert_success(&app);
     assert_eq!(app.staged.hunks().len(), 1);
 
@@ -125,12 +128,14 @@ fn split_mode_space_toggles_a_file_between_the_sides() {
 
     // Space stages the unstaged file...
     press(&mut app, KeyCode::Char(' '));
+    app.wait_for_refresh();
     assert_success(&app);
     assert_eq!(app.staged.hunks().len(), 1);
     assert!(app.unstaged.files.is_empty(), "file left the unstaged side");
 
     // ...and a second space unstages it again (the file is now staged-only).
     press(&mut app, KeyCode::Char(' '));
+    app.wait_for_refresh();
     assert_success(&app);
     assert!(app.staged.files.is_empty());
     assert_eq!(app.unstaged.hunks().len(), 1);
@@ -151,6 +156,7 @@ fn split_mode_tab_lands_in_the_staged_pane_after_staging() {
 
     // Stage the file: the unstaged pane is now hidden.
     press(&mut app, KeyCode::Char(' '));
+    app.wait_for_refresh();
     assert_success(&app);
     assert!(app.unstaged.files.is_empty());
 
@@ -167,6 +173,7 @@ fn split_mode_tab_lands_in_the_staged_pane_after_staging() {
 
     // u unstages the hunk from the staged pane.
     press(&mut app, KeyCode::Char('u'));
+    app.wait_for_refresh();
     assert_success(&app);
     assert!(app.staged.files.is_empty());
     assert_eq!(app.unstaged.hunks().len(), 1);

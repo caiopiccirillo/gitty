@@ -210,6 +210,7 @@ fn app_discards_a_hunk_after_confirmation() {
     // d again, then y: the hunk is discarded.
     app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
     app.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+    app.wait_for_refresh();
     assert_success(&app);
     assert_eq!(app.unstaged.hunks().len(), 1);
     assert!(app.discard_confirm.is_none());
@@ -227,6 +228,7 @@ fn app_discards_a_staged_hunk_with_confirmation() {
     app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
     assert!(app.discard_confirm.is_some());
     app.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+    app.wait_for_refresh();
 
     assert_success(&app);
     assert!(app.staged.files.is_empty());

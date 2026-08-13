@@ -18,7 +18,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc;
+use std::time::Duration;
 
 use anyhow::Result;
 use ratatui::layout::Rect;
@@ -26,7 +26,7 @@ use ratatui::widgets::ListState;
 
 use crate::diff::{DiffLine, DiffView, FileInfo, HunkId, LineKind, SelectedLines};
 use crate::git;
-use crate::refresh::{self, RefreshOutcome};
+use crate::refresh;
 use crate::tree::{self, FileEntry, Node};
 
 /// Which side of the staging area is focused (and, in the classic layout,
@@ -129,7 +129,7 @@ pub struct App {
     /// epoch are discarded as stale.
     epoch: Arc<AtomicU64>,
     /// Channel of the background refresh worker (`None` in tests).
-    refresh_rx: Option<mpsc::Receiver<RefreshOutcome>>,
+    refresh: Option<refresh::RefreshWorker>,
 }
 
 impl App {
@@ -144,7 +144,7 @@ impl App {
             git::load_staged_diff(repo_path)?,
             repo_path.to_path_buf(),
         );
-        app.refresh_rx = Some(refresh::spawn(
+        app.refresh = Some(refresh::spawn(
             repo_path.to_path_buf(),
             Arc::clone(&app.epoch),
         ));
@@ -176,7 +176,7 @@ impl App {
             repo_path,
             should_quit: false,
             epoch: Arc::new(AtomicU64::new(0)),
-            refresh_rx: None,
+            refresh: None,
         };
         app.rebuild_tree();
         app
@@ -627,18 +627,32 @@ impl App {
         });
     }
 
-    /// Run a git operation against the repo and refresh, showing the
-    /// outcome (success or failure) in the status bar.
+    /// Run a git operation against the repo, showing the outcome (success
+    /// or failure) in the status bar. After a successful mutation the diffs
+    /// are recomputed by the background worker (poked right away) so the
+    /// UI thread never blocks on repository I/O.
     fn run_op(
         &mut self,
         verb: &str,
         success: Option<String>,
         op: impl FnOnce(&Path) -> Result<()>,
     ) {
-        self.message = match op(&self.repo_path).and_then(|()| self.refresh()) {
-            Ok(()) => success.map(Message::success),
+        self.message = match op(&self.repo_path) {
+            Ok(()) => {
+                self.schedule_refresh();
+                success.map(Message::success)
+            }
             Err(e) => Some(Message::error(format!("{verb} failed: {e}"))),
         };
+    }
+
+    /// Invalidate in-flight snapshots and wake the worker to recompute the
+    /// diffs immediately (no-op without a worker, e.g. in tests).
+    fn schedule_refresh(&mut self) {
+        self.epoch.fetch_add(1, Ordering::SeqCst);
+        if let Some(worker) = &self.refresh {
+            worker.poke();
+        }
     }
 
     fn with_hunk(&mut self, verb: &str, op: impl FnOnce(&Path, HunkId) -> Result<()>) {
@@ -670,17 +684,38 @@ impl App {
         if self.pane().visual_anchor.is_some() {
             return; // apply later, when the selection is done
         }
-        let Some(rx) = &self.refresh_rx else {
+        let Some(worker) = &self.refresh else {
             return;
         };
         let mut latest = None;
-        while let Ok(outcome) = rx.try_recv() {
+        while let Ok(outcome) = worker.rx.try_recv() {
             latest = Some(outcome);
         }
         if let Some(outcome) = latest
             && outcome.epoch >= self.epoch.load(Ordering::SeqCst)
         {
             self.apply_refreshed(outcome.unstaged, outcome.staged);
+        }
+    }
+
+    /// Wait for the next fresh background snapshot and apply it. Used by
+    /// tests after a mutation; in the UI the idle-tick `poll_refresh`
+    /// applies it within a frame. Unlike `poll_refresh` this applies even
+    /// during a visual selection, since the caller just finished its own
+    /// mutation.
+    pub fn wait_for_refresh(&mut self) {
+        let Some(worker) = &self.refresh else {
+            return;
+        };
+        loop {
+            let Ok(outcome) = worker.rx.recv_timeout(Duration::from_secs(10)) else {
+                return;
+            };
+            if outcome.epoch < self.epoch.load(Ordering::SeqCst) {
+                continue; // stale, computed before the last mutation
+            }
+            self.apply_refreshed(outcome.unstaged, outcome.staged);
+            return;
         }
     }
 
@@ -710,10 +745,11 @@ impl App {
             self.message = Some(Message::error("empty commit message"));
             return;
         }
-        self.message = match git::commit(&self.repo_path, &message)
-            .and_then(|short| self.refresh().map(|()| format!("committed {short}")))
-        {
-            Ok(msg) => Some(Message::success(msg)),
+        self.message = match git::commit(&self.repo_path, &message) {
+            Ok(short) => {
+                self.schedule_refresh();
+                Some(Message::success(format!("committed {short}")))
+            }
             Err(e) => Some(Message::error(format!("commit failed: {e}"))),
         };
     }

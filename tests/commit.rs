@@ -129,6 +129,7 @@ fn app_commit_flow() {
 
     // Stage the file, then commit through the box.
     press(&mut app, KeyCode::Char(' '));
+    app.wait_for_refresh();
     assert_eq!(app.staged.files.len(), 1);
     press(&mut app, KeyCode::Char('c'));
     assert!(app.commit_input.is_some());
@@ -136,6 +137,7 @@ fn app_commit_flow() {
         press(&mut app, KeyCode::Char(c));
     }
     press(&mut app, KeyCode::Enter);
+    app.wait_for_refresh();
     assert!(
         app.message
             .as_ref()
@@ -155,6 +157,7 @@ fn esc_cancels_the_commit() {
     let mut app = App::load(dir.path()).unwrap();
 
     press(&mut app, KeyCode::Char(' '));
+    app.wait_for_refresh();
     press(&mut app, KeyCode::Char('c'));
     press(&mut app, KeyCode::Char('x'));
     press(&mut app, KeyCode::Esc);
@@ -172,6 +175,7 @@ fn empty_message_is_rejected() {
     let mut app = App::load(dir.path()).unwrap();
 
     press(&mut app, KeyCode::Char(' '));
+    app.wait_for_refresh();
     press(&mut app, KeyCode::Char('c'));
     press(&mut app, KeyCode::Enter);
     assert_eq!(
