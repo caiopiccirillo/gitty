@@ -7,12 +7,23 @@ use common::{BASE, commit_file};
 use git2::Repository;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use gitty::app::App;
+use gitty::app::{App, Severity};
 use gitty::diff::{LineKind, SelectedLines};
 use gitty::git::{
     discard_file, discard_hunk, discard_lines, discard_staged_file, discard_staged_hunk,
     load_staged_diff, load_unstaged_diff, stage_file, stage_hunk,
 };
+
+/// Successful operations leave a success message in the status bar.
+fn assert_success(app: &App) {
+    assert!(
+        app.message
+            .as_ref()
+            .is_some_and(|m| m.severity == Severity::Success),
+        "expected a success message, got {:?}",
+        app.message
+    );
+}
 
 /// Repo with `f.txt` committed, then changed at lines 1 and 10 (two hunks).
 fn repo_with_two_hunks() -> (tempfile::TempDir, String) {
@@ -199,7 +210,7 @@ fn app_discards_a_hunk_after_confirmation() {
     // d again, then y: the hunk is discarded.
     app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
     app.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
-    assert_eq!(app.message, None);
+    assert_success(&app);
     assert_eq!(app.unstaged.hunks().len(), 1);
     assert!(app.discard_confirm.is_none());
 }
@@ -217,7 +228,7 @@ fn app_discards_a_staged_hunk_with_confirmation() {
     assert!(app.discard_confirm.is_some());
     app.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
 
-    assert_eq!(app.message, None);
+    assert_success(&app);
     assert!(app.staged.files.is_empty());
     assert_eq!(app.unstaged.hunks().len(), 1);
     assert_eq!(

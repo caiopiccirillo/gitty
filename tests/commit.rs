@@ -7,7 +7,7 @@ use common::{BASE, commit_file};
 use git2::Repository;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use gitty::app::App;
+use gitty::app::{App, Severity};
 use gitty::git::{commit, load_staged_diff, load_unstaged_diff, stage_file};
 
 fn init_with_identity() -> (tempfile::TempDir, Repository) {
@@ -118,7 +118,14 @@ fn app_commit_flow() {
     // Nothing staged yet: the box must not open.
     press(&mut app, KeyCode::Char('c'));
     assert!(app.commit_input.is_none());
-    assert_eq!(app.message.as_deref(), Some("nothing staged"));
+    assert_eq!(
+        app.message.as_ref().map(|m| m.text.as_str()),
+        Some("nothing staged")
+    );
+    assert_eq!(
+        app.message.as_ref().map(|m| m.severity),
+        Some(Severity::Info)
+    );
 
     // Stage the file, then commit through the box.
     press(&mut app, KeyCode::Char(' '));
@@ -131,8 +138,8 @@ fn app_commit_flow() {
     press(&mut app, KeyCode::Enter);
     assert!(
         app.message
-            .as_deref()
-            .is_some_and(|m| m.starts_with("committed "))
+            .as_ref()
+            .is_some_and(|m| m.severity == Severity::Success && m.text.starts_with("committed "))
     );
     assert!(app.staged.files.is_empty());
     assert!(app.unstaged.files.is_empty());
@@ -167,6 +174,13 @@ fn empty_message_is_rejected() {
     press(&mut app, KeyCode::Char(' '));
     press(&mut app, KeyCode::Char('c'));
     press(&mut app, KeyCode::Enter);
-    assert_eq!(app.message.as_deref(), Some("empty commit message"));
+    assert_eq!(
+        app.message.as_ref().map(|m| m.text.as_str()),
+        Some("empty commit message")
+    );
+    assert_eq!(
+        app.message.as_ref().map(|m| m.severity),
+        Some(Severity::Error)
+    );
     assert_eq!(app.staged.files.len(), 1);
 }

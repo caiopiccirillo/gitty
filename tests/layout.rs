@@ -6,8 +6,19 @@ use common::{BASE, commit_file};
 use git2::Repository;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use gitty::app::{App, Focus, Mode, Side};
+use gitty::app::{App, Focus, Mode, Severity, Side};
 use gitty::git::{load_staged_diff, load_unstaged_diff};
+
+/// Successful operations leave a success message in the status bar.
+fn assert_success(app: &App) {
+    assert!(
+        app.message
+            .as_ref()
+            .is_some_and(|m| m.severity == Severity::Success),
+        "expected a success message, got {:?}",
+        app.message
+    );
+}
 
 /// Repo with f.txt and g.txt, both modified (one hunk each).
 fn repo_with_two_files() -> tempfile::TempDir {
@@ -41,7 +52,7 @@ fn split_mode_stages_from_the_unstaged_pane_and_unstages_from_the_staged_pane() 
     // Open f.txt's diff and stage its hunk from the unstaged pane.
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Char('s'));
-    assert_eq!(app.message, None);
+    assert_success(&app);
     assert_eq!(app.staged.hunks().len(), 1, "hunk staged");
     assert_eq!(app.unstaged.files.len(), 1, "only g.txt left unstaged");
 
@@ -60,7 +71,7 @@ fn split_mode_stages_from_the_unstaged_pane_and_unstages_from_the_staged_pane() 
             .any(|l| l.content == "L1")
     );
     press(&mut app, KeyCode::Char('u'));
-    assert_eq!(app.message, None);
+    assert_success(&app);
     assert!(load_staged_diff(dir.path()).unwrap().files.is_empty());
     assert_eq!(load_unstaged_diff(dir.path()).unwrap().files.len(), 2);
 }
@@ -73,7 +84,7 @@ fn split_mode_keeps_the_selection_when_switching_panes() {
 
     // Stage f.txt so the staged pane has content.
     press(&mut app, KeyCode::Char(' '));
-    assert_eq!(app.message, None);
+    assert_success(&app);
     assert_eq!(app.staged.hunks().len(), 1);
 
     // Select g.txt (second row), open its diff in the unstaged pane.
@@ -114,13 +125,13 @@ fn split_mode_space_toggles_a_file_between_the_sides() {
 
     // Space stages the unstaged file...
     press(&mut app, KeyCode::Char(' '));
-    assert_eq!(app.message, None);
+    assert_success(&app);
     assert_eq!(app.staged.hunks().len(), 1);
     assert!(app.unstaged.files.is_empty(), "file left the unstaged side");
 
     // ...and a second space unstages it again (the file is now staged-only).
     press(&mut app, KeyCode::Char(' '));
-    assert_eq!(app.message, None);
+    assert_success(&app);
     assert!(app.staged.files.is_empty());
     assert_eq!(app.unstaged.hunks().len(), 1);
 
@@ -140,7 +151,7 @@ fn split_mode_tab_lands_in_the_staged_pane_after_staging() {
 
     // Stage the file: the unstaged pane is now hidden.
     press(&mut app, KeyCode::Char(' '));
-    assert_eq!(app.message, None);
+    assert_success(&app);
     assert!(app.unstaged.files.is_empty());
 
     // Tab from the files pane lands in the staged pane, which is the only
@@ -156,7 +167,7 @@ fn split_mode_tab_lands_in_the_staged_pane_after_staging() {
 
     // u unstages the hunk from the staged pane.
     press(&mut app, KeyCode::Char('u'));
-    assert_eq!(app.message, None);
+    assert_success(&app);
     assert!(app.staged.files.is_empty());
     assert_eq!(app.unstaged.hunks().len(), 1);
 }
