@@ -154,12 +154,14 @@ fn app_stages_a_file_from_the_files_pane() {
     let mut app = App::load(dir.path()).unwrap();
 
     app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+    app.wait_for_refresh();
     assert_success(&app);
     assert!(app.unstaged.files.is_empty());
     assert_eq!(app.staged.files.len(), 1);
 
     app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+    app.wait_for_refresh();
     assert_success(&app);
     assert!(app.staged.files.is_empty());
     assert_eq!(app.unstaged.files.len(), 1);
@@ -283,6 +285,7 @@ fn app_stages_the_visually_selected_lines() {
     app.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
     app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
     app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+    app.wait_for_refresh();
 
     assert_success(&app);
     assert_eq!(additions(&app.staged), vec!["L2"]);
@@ -305,6 +308,7 @@ fn app_stages_a_whole_directory() {
     assert!(matches!(app.selected_node(), Some(Node::Dir { .. })));
 
     app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+    app.wait_for_refresh();
     assert_success(&app);
     assert!(app.unstaged.files.is_empty());
     assert_eq!(app.staged.files.len(), 2);
@@ -312,6 +316,7 @@ fn app_stages_a_whole_directory() {
     app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     assert!(matches!(app.selected_node(), Some(Node::Dir { .. })));
     app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+    app.wait_for_refresh();
     assert_success(&app);
     assert!(app.staged.files.is_empty());
     assert_eq!(app.unstaged.files.len(), 2);
@@ -326,6 +331,7 @@ fn app_stages_and_unstages_the_hunk_under_the_cursor() {
     // Stage hunk 0 (cursor starts on the first hunk header).
     app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+    app.wait_for_refresh();
     assert_success(&app);
     assert_eq!(app.unstaged.hunks().len(), 1);
     assert_eq!(app.staged.hunks().len(), 1);
@@ -333,6 +339,7 @@ fn app_stages_and_unstages_the_hunk_under_the_cursor() {
     // Stage the remaining hunk: the file leaves the unstaged list and the
     // focus falls back to the files pane.
     app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+    app.wait_for_refresh();
     assert_success(&app);
     assert!(app.unstaged.files.is_empty());
     assert_eq!(app.staged.hunks().len(), 2);
@@ -342,6 +349,7 @@ fn app_stages_and_unstages_the_hunk_under_the_cursor() {
     app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+    app.wait_for_refresh();
     assert_success(&app);
     assert_eq!(app.staged.hunks().len(), 1);
     assert_eq!(app.unstaged.hunks().len(), 1);
