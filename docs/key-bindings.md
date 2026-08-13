@@ -17,7 +17,13 @@
 | `Enter`               | Commit                       |
 | `Esc`                 | Cancel                       |
 | `←` `→`, `Home`, `End` | Move the text cursor         |
-| `Backspace`, `Ctrl+U` | Delete backwards / clear all |
+| `Backspace`, `Delete` | Delete backwards / forwards  |
+| `Ctrl+A` `Ctrl+E`     | Jump to the start / end      |
+| `Ctrl+W`, `Alt+Backspace` | Delete the previous word |
+| `Ctrl+K`              | Delete to the end of the line|
+| `Ctrl+U`              | Clear the whole message      |
+
+The box title shows how many files the commit will contain.
 
 ## Files pane
 

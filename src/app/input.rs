@@ -153,9 +153,17 @@ impl App {
             (_, KeyCode::Enter) => self.commit(),
             (_, KeyCode::Left) => input.left(),
             (_, KeyCode::Right) => input.right(),
-            (_, KeyCode::Home) => input.cursor = 0,
-            (_, KeyCode::End) => input.cursor = input.text.len(),
+            (_, KeyCode::Home) | (KeyModifiers::CONTROL, KeyCode::Char('a')) => {
+                input.cursor = 0;
+            }
+            (_, KeyCode::End) | (KeyModifiers::CONTROL, KeyCode::Char('e')) => {
+                input.cursor = input.text.len();
+            }
+            (KeyModifiers::CONTROL, KeyCode::Char('w'))
+            | (KeyModifiers::ALT, KeyCode::Backspace) => input.backspace_word(),
             (_, KeyCode::Backspace) => input.backspace(),
+            (_, KeyCode::Delete) => input.delete(),
+            (KeyModifiers::CONTROL, KeyCode::Char('k')) => input.kill_to_end(),
             (KeyModifiers::CONTROL, KeyCode::Char('u')) => {
                 input.text.clear();
                 input.cursor = 0;

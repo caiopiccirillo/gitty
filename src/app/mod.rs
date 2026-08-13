@@ -924,6 +924,39 @@ impl CommitInput {
         }
     }
 
+    /// Delete the character under the cursor (`Delete` key).
+    fn delete(&mut self) {
+        if self.cursor < self.text.len() {
+            let end = self.text[self.cursor..]
+                .chars()
+                .next()
+                .map_or(self.text.len(), |c| self.cursor + c.len_utf8());
+            self.text.replace_range(self.cursor..end, "");
+        }
+    }
+
+    /// Delete from the start of the current word back to the cursor,
+    /// readline-style (`Ctrl+W`, `Alt+Backspace`).
+    fn backspace_word(&mut self) {
+        let before: Vec<char> = self.text[..self.cursor].chars().collect();
+        let mut kept = before.len();
+        // Trailing whitespace, then the word characters before it.
+        while kept > 0 && before[kept - 1].is_whitespace() {
+            kept -= 1;
+        }
+        while kept > 0 && !before[kept - 1].is_whitespace() {
+            kept -= 1;
+        }
+        let boundary = before[..kept].iter().map(|c| c.len_utf8()).sum();
+        self.text.replace_range(boundary..self.cursor, "");
+        self.cursor = boundary;
+    }
+
+    /// Delete everything from the cursor to the end (`Ctrl+K`).
+    fn kill_to_end(&mut self) {
+        self.text.truncate(self.cursor);
+    }
+
     fn left(&mut self) {
         if let Some(prev) = self.prev_boundary() {
             self.cursor = prev;
@@ -1502,6 +1535,50 @@ mod tests {
         input.left();
         input.backspace();
         assert_eq!(input.text, "hell!", "removes the char before the cursor");
+    }
+
+    #[test]
+    fn commit_input_supports_readline_word_operations() {
+        let mut input = CommitInput {
+            text: "one two three".into(),
+            cursor: 13,
+        };
+        input.backspace_word();
+        assert_eq!(input.text, "one two ");
+        input.backspace_word();
+        assert_eq!(input.text, "one ");
+
+        input.kill_to_end();
+        assert_eq!(input.text, "one ");
+        input.insert('x');
+        assert_eq!(input.text, "one x");
+        assert_eq!(input.cursor, 5, "cursor sits after the inserted char");
+        input.delete();
+        assert_eq!(input.text, "one x", "delete at the end is a no-op");
+
+        input.left();
+        input.delete();
+        assert_eq!(input.text, "one ");
+        assert_eq!(input.cursor, 4);
+    }
+
+    #[test]
+    fn commit_box_keys_cover_readline_bindings() {
+        let mut app = test_app();
+        app.commit_input = Some(CommitInput::default());
+        let ctrl = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+
+        for c in "fix the bug".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Char('x'));
+        app.handle_key(ctrl('w'));
+        app.handle_key(ctrl('k'));
+        assert_eq!(app.commit_input.as_ref().unwrap().text, "fix the ");
+
+        app.handle_key(ctrl('a'));
+        app.handle_key(ctrl('e'));
+        assert_eq!(app.commit_input.as_ref().unwrap().cursor, 8);
     }
 
     #[test]
