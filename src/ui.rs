@@ -66,7 +66,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         }
     }
     frame.render_widget(status_bar(app), status_area);
-    if let Some(ref input) = app.commit_input {
+    if app.help_open {
+        render_help(frame);
+    } else if let Some(ref input) = app.commit_input {
         render_commit_box(frame, input);
     }
 }
@@ -81,6 +83,63 @@ fn render_split_side(frame: &mut Frame, app: &mut App, main_area: Rect, side: Si
     app.diff_rects[side.index()] = Some(diff_area);
     render_files(frame, app, files_area);
     render_diff(frame, app, diff_area, side);
+}
+
+/// The key bindings shown by the `?` help overlay, mirrored in the book
+/// (`docs/key-bindings.md`).
+const HELP_LINES: &[&str] = &[
+    "Global",
+    "  q, Ctrl+C   Quit",
+    "  ?           Show or close this help",
+    "  Tab         Classic: switch the shown side. Split: cycle the panes",
+    "  c           Open the commit message box",
+    "  m           Toggle the classic / split layout",
+    "",
+    "Files pane",
+    "  j/k, Up/Dn  Move the selection",
+    "  g/G, Home   First / last row",
+    "  Enter       Open a file's diff; fold / unfold a directory",
+    "  h/l, Left   Collapse / expand a directory, or go to its parent",
+    "  Space       Stage or unstage the selected file or directory",
+    "  d           Discard the selection (asks for confirmation)",
+    "",
+    "Diff pane",
+    "  j/k, Up/Dn  Move between changed lines",
+    "  Ctrl+U/D    Move half a page",
+    "  PgUp/PgDn   Move a page",
+    "  g/G         Jump to the first / last changed line",
+    "  n/p         Jump to the next / previous hunk",
+    "  v           Start or end a visual line selection",
+    "  s, u        Stage / unstage the hunk or the selected lines",
+    "  d           Discard the hunk or the selected lines",
+    "  h, Left     Back to the files pane",
+    "  Esc         Cancel the selection, then back to files",
+    "",
+    "Commit box",
+    "  Enter       Commit",
+    "  Esc         Cancel",
+    "  Left/Right, Home/End, Backspace, Ctrl+U   Edit the message",
+];
+
+/// The centered `?` help overlay with all key bindings.
+fn render_help(frame: &mut Frame) {
+    let area = frame.area();
+    let height = u16::try_from(HELP_LINES.len()).unwrap_or(u16::MAX) + 2;
+    let width = 74.min(area.width.saturating_sub(2));
+    let rect = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, rect);
+    let block = Block::bordered()
+        .title(" Help (? or q to close) ")
+        .border_style(Style::new().fg(Color::White));
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+    let lines: Vec<Line> = HELP_LINES.iter().copied().map(Line::from).collect();
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 /// The centered commit-message box, with the terminal cursor inside it.
@@ -380,16 +439,16 @@ fn status_bar(app: &App) -> Paragraph<'static> {
 fn hints(app: &App) -> &'static str {
     match (app.focus, app.side) {
         (Focus::Files, Side::Unstaged) => {
-            " Tab · j/k · space stage · d discard · h/l · m layout · c commit · q quit "
+            " Tab · j/k · space stage · d discard · h/l · m layout · c commit · ? help · q quit "
         }
         (Focus::Files, Side::Staged) => {
-            " Tab · j/k · space unstage · d discard · h/l · m layout · c commit · q quit "
+            " Tab · j/k · space unstage · d discard · h/l · m layout · c commit · ? help · q quit "
         }
         (Focus::Diff, Side::Unstaged) => {
-            " j/k change · n/p hunk · v select · s stage · d discard · m layout · c commit · q quit "
+            " j/k change · n/p hunk · v select · s stage · d discard · m layout · c commit · ? help · q quit "
         }
         (Focus::Diff, Side::Staged) => {
-            " j/k change · n/p hunk · v select · u unstage · d discard · m layout · c commit · q quit "
+            " j/k change · n/p hunk · v select · u unstage · d discard · m layout · c commit · ? help · q quit "
         }
     }
 }
@@ -950,5 +1009,17 @@ mod tests {
         let (_, buffer) = render_app(&mut app, 80, 10);
         assert_ne!(buffer[(1, 0)].bg, Color::Gray);
         assert_eq!(buffer[(25, 0)].bg, Color::Gray, "diff title reversed");
+    }
+
+    #[test]
+    fn help_overlay_lists_the_bindings() {
+        let mut app = sample_app();
+        press(&mut app, KeyCode::Char('?'));
+        let (screen, _) = render_app(&mut app, 100, 40);
+        assert!(screen.contains("Help"));
+        assert!(screen.contains("Files pane"));
+        assert!(screen.contains("Diff pane"));
+        assert!(screen.contains("Commit box"));
+        assert!(screen.contains("Stage or unstage the selected file"));
     }
 }

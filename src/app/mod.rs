@@ -120,6 +120,8 @@ pub struct App {
     /// persists until the next operation, so failures stay visible while
     /// the user navigates.
     pub message: Option<Message>,
+    /// Whether the `?` help overlay is open (modal).
+    pub help_open: bool,
     viewport_height: usize,
     repo_path: PathBuf,
     pub should_quit: bool,
@@ -169,6 +171,7 @@ impl App {
             commit_input: None,
             discard_confirm: None,
             message: None,
+            help_open: false,
             viewport_height: 0,
             repo_path,
             should_quit: false,
@@ -1104,6 +1107,31 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.focus, Focus::Diff);
         assert_eq!(app.current_hunk(), Some(hunk(1, 0)), "still on b.txt");
+    }
+
+    #[test]
+    fn help_overlay_is_modal() {
+        let mut app = test_app();
+        press(&mut app, KeyCode::Char('?'));
+        assert!(app.help_open);
+        // Any other key is ignored while the overlay is open.
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('c'));
+        press(&mut app, KeyCode::Tab);
+        assert!(app.help_open);
+        assert_eq!(app.selected_row, 0, "navigation is blocked");
+        assert!(app.commit_input.is_none());
+        assert_eq!(app.focus, Focus::Files);
+
+        // The close keys leave the overlay.
+        press(&mut app, KeyCode::Char('?'));
+        assert!(!app.help_open);
+        press(&mut app, KeyCode::Char('?'));
+        press(&mut app, KeyCode::Esc);
+        assert!(!app.help_open);
+        press(&mut app, KeyCode::Char('?'));
+        press(&mut app, KeyCode::Char('q'));
+        assert!(!app.help_open);
     }
 
     #[test]
