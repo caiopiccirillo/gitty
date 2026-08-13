@@ -76,6 +76,13 @@ pub struct PaneState {
     pub scroll: usize,
 }
 
+/// How wide the files pane can be, in percent of the screen width.
+pub const MIN_FILES_PERCENT: u16 = 15;
+pub const MAX_FILES_PERCENT: u16 = 60;
+
+/// How much `[`/`]` resize the files pane at a time.
+const FILES_PERCENT_STEP: u16 = 5;
+
 /// Which pane has keyboard focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -91,6 +98,8 @@ pub struct App {
     pub side: Side,
     pub mode: Mode,
     pub focus: Focus,
+    /// Width of the files pane in percent of the screen (`[`/`]` resize).
+    pub files_percent: u16,
     /// Visible rows of the files pane tree (directories + files).
     pub tree: Vec<Node>,
     /// Merged file list the split-mode tree is built from; the file rows of
@@ -159,6 +168,7 @@ impl App {
             side: Side::Unstaged,
             mode: Mode::Classic,
             focus: Focus::Files,
+            files_percent: 30,
             tree: Vec::new(),
             entries: Vec::new(),
             collapsed_dirs: HashSet::new(),
@@ -349,6 +359,19 @@ impl App {
         self.reset_panes();
         self.rebuild_tree();
         self.snap_to_first_change();
+    }
+
+    /// Widen the files pane by one step (`]`).
+    pub fn grow_files_pane(&mut self) {
+        self.files_percent = (self.files_percent + FILES_PERCENT_STEP).min(MAX_FILES_PERCENT);
+    }
+
+    /// Narrow the files pane by one step (`[`).
+    pub fn shrink_files_pane(&mut self) {
+        self.files_percent = self
+            .files_percent
+            .saturating_sub(FILES_PERCENT_STEP)
+            .max(MIN_FILES_PERCENT);
     }
 
     /// The hunk under the cursor; the target of stage/unstage.
@@ -1099,6 +1122,27 @@ mod tests {
         assert_eq!(app.selected_row, 1, "clamped at last row");
         press(&mut app, KeyCode::Char('k'));
         assert_eq!(app.selected_row, 0);
+    }
+
+    #[test]
+    fn bracket_keys_resize_the_files_pane_within_bounds() {
+        let mut app = test_app();
+        assert_eq!(app.files_percent, 30);
+        press(&mut app, KeyCode::Char(']'));
+        press(&mut app, KeyCode::Char(']'));
+        assert_eq!(app.files_percent, 40);
+        press(&mut app, KeyCode::Char('['));
+        assert_eq!(app.files_percent, 35);
+
+        // The width clamps at both ends.
+        for _ in 0..20 {
+            press(&mut app, KeyCode::Char('['));
+        }
+        assert_eq!(app.files_percent, MIN_FILES_PERCENT);
+        for _ in 0..20 {
+            press(&mut app, KeyCode::Char(']'));
+        }
+        assert_eq!(app.files_percent, MAX_FILES_PERCENT);
     }
 
     #[test]

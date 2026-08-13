@@ -37,6 +37,8 @@ impl App {
             (_, KeyCode::Tab) => self.cycle_focus(),
             (_, KeyCode::Char('c')) => self.open_commit(),
             (_, KeyCode::Char('m')) => self.toggle_mode(),
+            (_, KeyCode::Char('[')) => self.shrink_files_pane(),
+            (_, KeyCode::Char(']')) => self.grow_files_pane(),
             _ => match self.focus {
                 Focus::Files => self.handle_files_key(key),
                 Focus::Diff => self.handle_diff_key(key),

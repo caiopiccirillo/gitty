@@ -19,9 +19,12 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(frame.area());
     match app.mode {
         Mode::Classic => {
-            let [files_area, diff_area] =
-                Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)])
-                    .areas(main_area);
+            let files = app.files_percent;
+            let [files_area, diff_area] = Layout::horizontal([
+                Constraint::Percentage(files),
+                Constraint::Percentage(100 - files),
+            ])
+            .areas(main_area);
             app.set_viewport_height(diff_area.height.saturating_sub(2) as usize);
             app.files_rect = files_area;
             app.diff_rects = [None; 2];
@@ -37,10 +40,12 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 // The unstaged pane sits between the files and the staged
                 // pane, mirroring the stage workflow left to right.
                 (true, true) => {
+                    let files = app.files_percent;
+                    let rest = 100 - files;
                     let [files_area, unstaged_area, staged_area] = Layout::horizontal([
-                        Constraint::Percentage(25),
-                        Constraint::Percentage(37),
-                        Constraint::Percentage(38),
+                        Constraint::Percentage(files),
+                        Constraint::Percentage(rest / 2),
+                        Constraint::Percentage(rest - rest / 2),
                     ])
                     .areas(main_area);
                     app.set_viewport_height(unstaged_area.height.saturating_sub(2) as usize);
@@ -76,9 +81,12 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
 /// The files pane plus one diff pane, filling the whole width.
 fn render_split_side(frame: &mut Frame, app: &mut App, main_area: Rect, side: Side) {
-    let [files_area, diff_area] =
-        Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)])
-            .areas(main_area);
+    let files = app.files_percent;
+    let [files_area, diff_area] = Layout::horizontal([
+        Constraint::Percentage(files),
+        Constraint::Percentage(100 - files),
+    ])
+    .areas(main_area);
     app.set_viewport_height(diff_area.height.saturating_sub(2) as usize);
     app.files_rect = files_area;
     app.diff_rects[side.index()] = Some(diff_area);
@@ -95,6 +103,7 @@ const HELP_LINES: &[&str] = &[
     "  Tab         Classic: switch the shown side. Split: cycle the panes",
     "  c           Open the commit message box",
     "  m           Toggle the classic / split layout",
+    "  [ ]         Narrow / widen the files pane",
     "",
     "Files pane",
     "  j/k, Up/Dn  Move the selection",
@@ -492,10 +501,10 @@ fn status_bar(app: &App) -> Paragraph<'static> {
 fn hints(app: &App) -> &'static str {
     match (app.focus, app.side) {
         (Focus::Files, Side::Unstaged) => {
-            " Tab · j/k · space stage · d discard · h/l · m layout · c commit · ? help · q quit "
+            " Tab · j/k · space stage · d discard · h/l · m layout · [/] width · c commit · ? help · q quit "
         }
         (Focus::Files, Side::Staged) => {
-            " Tab · j/k · space unstage · d discard · h/l · m layout · c commit · ? help · q quit "
+            " Tab · j/k · space unstage · d discard · h/l · m layout · [/] width · c commit · ? help · q quit "
         }
         (Focus::Diff, Side::Unstaged) => {
             " j/k change · n/p hunk · v select · space/s stage · d discard · m layout · c commit · ? help · q quit "
@@ -1178,5 +1187,20 @@ mod tests {
         let (_, buffer) = render_app(&mut app, 80, 10);
         assert_eq!(buffer[(78, 7)].symbol(), "█", "thumb reaches the bottom");
         assert_eq!(buffer[(78, 1)].symbol(), "│", "track above the thumb");
+    }
+
+    #[test]
+    fn files_pane_width_follows_the_resize_setting() {
+        let mut app = sample_app();
+        // Widen to 50%: the diff pane starts at column 40.
+        app.files_percent = 50;
+        let (_, buffer) = render_app(&mut app, 80, 10);
+        assert_eq!(buffer[(1, 1)].symbol(), "M", "files pane at its usual spot");
+        assert_eq!(buffer[(41, 1)].symbol(), "@", "diff starts at column 41");
+
+        // Narrow to 20%: the diff starts at column 17.
+        app.files_percent = 20;
+        let (_, buffer) = render_app(&mut app, 80, 10);
+        assert_eq!(buffer[(17, 1)].symbol(), "@", "diff starts at column 17");
     }
 }
