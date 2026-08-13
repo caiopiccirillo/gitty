@@ -276,7 +276,66 @@ fn render_diff(frame: &mut Frame, app: &App, area: Rect, side: Side) {
     };
     let focused = app.focus == Focus::Diff && app.side == side;
     let block = pane_block(title, focused);
+    let lines = diff_lines(app, side);
 
+    if lines.is_empty() {
+        let empty = Paragraph::new("no changes")
+            .style(Style::new().fg(Color::DarkGray))
+            .block(block);
+        frame.render_widget(empty, area);
+        return;
+    }
+
+    // The rightmost column is reserved for the scrollbar when the content
+    // overflows the pane; the text renders into the columns left of it.
+    let inner = block.inner(area);
+    let content_area = Rect::new(
+        inner.x,
+        inner.y,
+        inner.width.saturating_sub(1),
+        inner.height,
+    );
+    frame.render_widget(block, area);
+    let scroll = u16::try_from(app.pane_of(side).scroll).unwrap_or(u16::MAX);
+    let total = lines.len();
+    let diff = Paragraph::new(lines).scroll((scroll, 0));
+    frame.render_widget(diff, content_area);
+
+    if total > usize::from(inner.height) {
+        render_scrollbar(frame, inner, app.pane_of(side).scroll, total);
+    }
+}
+
+/// Draw the diff pane's scrollbar in the rightmost column of `inner`.
+///
+/// The scroll offset is the first visible line (max `total - viewport`),
+/// so the thumb is positioned with the classic scrollbar math: at full
+/// scroll it sits flush against the bottom of the track.
+fn render_scrollbar(frame: &mut Frame, inner: Rect, scroll: usize, total: usize) {
+    let track = usize::from(inner.height);
+    let max_scroll = total.saturating_sub(track);
+    if max_scroll == 0 {
+        return;
+    }
+    let thumb = (track * track / total).max(1);
+    let start = scroll.min(max_scroll) * (track - thumb) / max_scroll;
+    let lines: Vec<Line> = (0..track)
+        .map(|row| {
+            let (symbol, style) = if (start..start + thumb).contains(&row) {
+                ("█", Style::new().fg(Color::White))
+            } else {
+                ("│", Style::new().fg(Color::DarkGray))
+            };
+            Line::from(Span::styled(symbol, style))
+        })
+        .collect();
+    let column = Rect::new(inner.x + inner.width - 1, inner.y, 1, inner.height);
+    frame.render_widget(Paragraph::new(lines), column);
+}
+
+/// The styled lines of one diff pane, with the cursor and visual selection
+/// highlighted.
+fn diff_lines(app: &App, side: Side) -> Vec<Line<'_>> {
     let pane = app.pane_of(side);
     let selection = app.selection_range_for(side);
     #[cfg(feature = "syntax")]
@@ -284,8 +343,7 @@ fn render_diff(frame: &mut Frame, app: &App, area: Rect, side: Side) {
         .selected_file_index_in(side)
         .and_then(|i| app.diff_of(side).files.get(i))
         .map(|f| f.path.clone());
-    let lines: Vec<Line> = app
-        .display_lines_for(side)
+    app.display_lines_for(side)
         .iter()
         .enumerate()
         .map(|(i, line)| {
@@ -344,18 +402,7 @@ fn render_diff(frame: &mut Frame, app: &App, area: Rect, side: Side) {
             push(content, line_style);
             Line::from(spans)
         })
-        .collect();
-
-    if lines.is_empty() {
-        let empty = Paragraph::new("no changes")
-            .style(Style::new().fg(Color::DarkGray))
-            .block(block);
-        frame.render_widget(empty, area);
-        return;
-    }
-    let scroll = u16::try_from(app.pane_of(side).scroll).unwrap_or(u16::MAX);
-    let diff = Paragraph::new(lines).block(block).scroll((scroll, 0));
-    frame.render_widget(diff, area);
+        .collect()
 }
 
 fn status_bar(app: &App) -> Paragraph<'static> {
@@ -1021,5 +1068,77 @@ mod tests {
         assert!(screen.contains("Diff pane"));
         assert!(screen.contains("Commit box"));
         assert!(screen.contains("Stage or unstage the selected file"));
+    }
+
+    #[test]
+    fn diff_pane_shows_a_scrollbar_when_content_overflows() {
+        // One file with 40 hunks: far more lines than the 10-row pane.
+        let line = |hunk_idx: usize| DiffLine {
+            kind: LineKind::HunkHeader,
+            content: format!("@@ hunk {hunk_idx} @@"),
+            file_idx: 0,
+            hunk_idx: Some(hunk_idx),
+        };
+        let view = DiffView {
+            lines: (0..40).map(line).collect(),
+            files: vec![FileInfo {
+                path: "long.txt".into(),
+                status: FileStatus::Modified,
+            }],
+        };
+        let mut app = App::new(view, DiffView::default(), PathBuf::from("/unused"));
+        let (_, buffer) = render_app(&mut app, 80, 10);
+        // The diff pane spans columns 24..79; the scrollbar sits in its
+        // last inner column (x=78, the border is at x=79).
+        let glyphs: String = (1..9)
+            .map(|y| buffer[(78, y)].symbol().to_string())
+            .collect();
+        assert!(
+            glyphs.contains('│') || glyphs.contains('█'),
+            "got {glyphs:?}"
+        );
+
+        // A short diff fits the pane: no scrollbar column is drawn.
+        let mut short = sample_app();
+        let (_, buffer) = render_app(&mut short, 80, 10);
+        let glyphs: String = (1..9)
+            .map(|y| buffer[(78, y)].symbol().to_string())
+            .collect();
+        assert!(
+            !glyphs.contains('│') && !glyphs.contains('█'),
+            "got {glyphs:?}"
+        );
+    }
+
+    #[test]
+    fn scrollbar_thumb_tracks_the_scroll_offset_to_the_end() {
+        // 100 lines in a 10-row terminal: the diff pane shows 7 rows
+        // (rows 1..7; the border and status bar use the rest).
+        let line = |i: usize| DiffLine {
+            kind: LineKind::Context,
+            content: format!("line {i}"),
+            file_idx: 0,
+            hunk_idx: None,
+        };
+        let view = DiffView {
+            lines: (0..100).map(line).collect(),
+            files: vec![FileInfo {
+                path: "long.txt".into(),
+                status: FileStatus::Modified,
+            }],
+        };
+        let mut app = App::new(view, DiffView::default(), PathBuf::from("/unused"));
+
+        // At the top the thumb sits on the first track row.
+        let (_, buffer) = render_app(&mut app, 80, 10);
+        assert_eq!(buffer[(78, 1)].symbol(), "█", "thumb starts at the top");
+
+        // At the bottom (scroll = 100 - 7) it sits flush on the last
+        // track row, not somewhere above it.
+        app.pane_mut().scroll = 93;
+        app.pane_mut().cursor = 99;
+        let (_, buffer) = render_app(&mut app, 80, 10);
+        assert_eq!(buffer[(78, 7)].symbol(), "█", "thumb reaches the bottom");
+        assert_eq!(buffer[(78, 1)].symbol(), "│", "track above the thumb");
     }
 }
