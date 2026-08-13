@@ -5,7 +5,7 @@
 | Key            | Action                              |
 | -------------- | ----------------------------------- |
 | `q`, `Ctrl+C`  | Quit                                |
-| `Tab`          | Classic: switch the shown side. Split: cycle the focus through the visible panes |
+| `Tab`          | Classic: switch the shown side, keeping each side's selection. Split: cycle the focus through the visible panes |
 | `c`            | Open the commit message box         |
 | `m`            | Toggle between the classic and split layouts |
 

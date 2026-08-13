@@ -100,6 +100,10 @@ pub struct App {
     pub collapsed_dirs: HashSet<String>,
     /// Selected row in the files pane tree.
     pub selected_row: usize,
+    /// Per-side remembered selection of the files pane, so switching sides
+    /// in the classic layout restores the user's place instead of jumping
+    /// back to the first row.
+    pub saved_rows: [usize; 2],
     /// Scroll state of the files pane; ratatui manages the offset so the
     /// selection stays visible in long lists.
     pub files_state: ListState,
@@ -157,6 +161,7 @@ impl App {
             entries: Vec::new(),
             collapsed_dirs: HashSet::new(),
             selected_row: 0,
+            saved_rows: [0; 2],
             files_state: ListState::default().with_selected(Some(0)),
             panes: [PaneState::default(); 2],
             files_rect: Rect::default(),
@@ -1072,12 +1077,33 @@ mod tests {
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Tab);
         assert_eq!(app.side, Side::Staged);
-        assert_eq!(app.selected_row, 0);
+        assert_eq!(app.selected_row, 0, "first visit starts at the first row");
         assert_eq!(app.focus, Focus::Files);
         // Staged side is empty: Enter must not focus the diff.
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.focus, Focus::Files);
         assert_eq!(app.current_hunk(), None);
+    }
+
+    #[test]
+    fn tab_remembers_each_sides_selection_and_cursor() {
+        let mut app = test_app();
+        // Unstaged side: select the second file and open its diff.
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.cursor(), 1, "snapped to the first change of b.txt");
+
+        // Switch away and back: the selection and cursor are restored.
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.side, Side::Unstaged);
+        assert_eq!(app.selected_row, 1, "selection restored");
+        assert_eq!(app.focus, Focus::Files);
+        assert_eq!(app.pane().cursor, 1, "cursor restored");
+
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.focus, Focus::Diff);
+        assert_eq!(app.current_hunk(), Some(hunk(1, 0)), "still on b.txt");
     }
 
     #[test]
