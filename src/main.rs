@@ -15,13 +15,17 @@ const TICK: Duration = Duration::from_millis(250);
 
 fn main() -> Result<()> {
     let path = PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| ".".into()));
-    let mut app = App::load(&path)?;
 
     let mut terminal = ratatui::init();
     ratatui::crossterm::execute!(
         std::io::stdout(),
         ratatui::crossterm::event::EnableMouseCapture
     )?;
+    // The initial diff load can take a while on large repositories; show
+    // a frame immediately so the user gets feedback instead of a blank
+    // terminal.
+    terminal.draw(ui::render_loading)?;
+    let mut app = App::load(&path)?;
     let result = run(&mut terminal, &mut app);
     let _ = ratatui::crossterm::execute!(
         std::io::stdout(),
