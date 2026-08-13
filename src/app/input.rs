@@ -34,6 +34,7 @@ impl App {
                 self.should_quit = true;
             }
             (_, KeyCode::Char('?')) => self.help_open = true,
+            (_, KeyCode::Char('z')) => self.undo(),
             (_, KeyCode::Tab) => self.cycle_focus(),
             (_, KeyCode::Char('c')) => self.open_commit(),
             (_, KeyCode::Char('m')) => self.toggle_mode(),

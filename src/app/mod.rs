@@ -26,8 +26,12 @@ use ratatui::widgets::ListState;
 
 use crate::diff::{DiffLine, DiffView, FileInfo, HunkId, LineKind, SelectedLines};
 use crate::git;
+use crate::git::FileSnapshot;
 use crate::refresh;
 use crate::tree::{self, FileEntry, Node};
+
+/// How many undo snapshots are kept in memory (oldest dropped beyond this).
+const UNDO_LIMIT: usize = 64;
 
 /// Which side of the staging area is focused (and, in the classic layout,
 /// which one is shown).
@@ -131,6 +135,8 @@ pub struct App {
     pub message: Option<Message>,
     /// Whether the `?` help overlay is open (modal).
     pub help_open: bool,
+    /// Snapshots taken before each mutation, for `z` undo (oldest first).
+    pub undo_stack: Vec<Vec<FileSnapshot>>,
     viewport_height: usize,
     repo_path: PathBuf,
     pub should_quit: bool,
@@ -182,6 +188,7 @@ impl App {
             discard_confirm: None,
             message: None,
             help_open: false,
+            undo_stack: Vec::new(),
             viewport_height: 0,
             repo_path,
             should_quit: false,
@@ -439,9 +446,13 @@ impl App {
         else {
             return;
         };
-        self.run_op(verb, Some(format!("{verb}d {}", file.path)), |repo_path| {
-            op(repo_path, &file)
-        });
+        let paths = vec![file.path.clone()];
+        self.run_op(
+            verb,
+            Some(format!("{verb}d {}", file.path)),
+            &paths,
+            |repo_path| op(repo_path, &file),
+        );
     }
 
     /// Stage all files beneath the selected directory (files pane, unstaged side).
@@ -476,9 +487,11 @@ impl App {
         op: impl Fn(&Path, &FileInfo) -> Result<()>,
     ) {
         let files = self.dir_files(side, dir);
+        let paths: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
         self.run_op(
             verb,
             Some(format!("{verb}d directory {dir}/")),
+            &paths,
             |repo_path| files.iter().try_for_each(|f| op(repo_path, f)),
         );
     }
@@ -544,6 +557,7 @@ impl App {
                 "staged {count} line(s) of hunk {} in {path}",
                 hunk.hunk_idx + 1
             )),
+            &[path],
             |repo_path| git::stage_lines(repo_path, hunk.file_idx, hunk.hunk_idx, &selected),
         );
     }
@@ -562,6 +576,7 @@ impl App {
                 "unstaged {count} line(s) of hunk {} in {path}",
                 hunk.hunk_idx + 1
             )),
+            &[path],
             |repo_path| git::unstage_lines(repo_path, hunk.file_idx, hunk.hunk_idx, &selected),
         );
     }
@@ -645,27 +660,73 @@ impl App {
             }
             other => other,
         };
-        self.run_op("discard", Some(format!("discarded {what}")), |repo_path| {
-            execute_discard(repo_path, action)
-        });
+        let paths: Vec<String> = match &action {
+            DiscardAction::Hunk { hunk, side } | DiscardAction::Lines { hunk, side, .. } => {
+                vec![self.diff_of(*side).files[hunk.file_idx].path.clone()]
+            }
+            DiscardAction::File { file, .. } => vec![file.path.clone()],
+            DiscardAction::Files { files, .. } => files.iter().map(|f| f.path.clone()).collect(),
+            DiscardAction::Dir { .. } => unreachable!("resolved to Files above"),
+        };
+        self.run_op(
+            "discard",
+            Some(format!("discarded {what}")),
+            &paths,
+            |repo_path| execute_discard(repo_path, action),
+        );
     }
 
     /// Run a git operation against the repo, showing the outcome (success
     /// or failure) in the status bar. After a successful mutation the diffs
     /// are recomputed by the background worker (poked right away) so the
-    /// UI thread never blocks on repository I/O.
+    /// UI thread never blocks on repository I/O. The index and worktree
+    /// state of the affected files (`paths`) is snapshotted beforehand so
+    /// `z` can undo the mutation.
     fn run_op(
         &mut self,
         verb: &str,
         success: Option<String>,
+        paths: &[String],
         op: impl FnOnce(&Path) -> Result<()>,
     ) {
+        let snapshots: Result<Vec<FileSnapshot>> = paths
+            .iter()
+            .map(|path| git::snapshot_file(&self.repo_path, path))
+            .collect();
         self.message = match op(&self.repo_path) {
             Ok(()) => {
                 self.schedule_refresh();
+                if let Ok(snapshots) = snapshots {
+                    if !snapshots.is_empty() {
+                        if self.undo_stack.len() >= UNDO_LIMIT {
+                            self.undo_stack.remove(0);
+                        }
+                        self.undo_stack.push(snapshots);
+                    }
+                }
                 success.map(Message::success)
             }
             Err(e) => Some(Message::error(format!("{verb} failed: {e}"))),
+        };
+    }
+
+    /// Undo the last mutation (`z`): restore the snapshots taken before it.
+    pub fn undo(&mut self) {
+        let Some(snapshots) = self.undo_stack.pop() else {
+            self.message = Some(Message::info("nothing to undo"));
+            return;
+        };
+        let what = match snapshots.as_slice() {
+            [] => String::new(),
+            [single] => format!("changes to {}", single.path),
+            many => format!("changes to {} file(s)", many.len()),
+        };
+        self.message = match git::restore_files(&self.repo_path, &snapshots) {
+            Ok(()) => {
+                self.schedule_refresh();
+                Some(Message::success(format!("undid {what}")))
+            }
+            Err(e) => Some(Message::error(format!("undo failed: {e}"))),
         };
     }
 
@@ -685,7 +746,7 @@ impl App {
         };
         let path = self.diff_of(self.side).files[hunk.file_idx].path.clone();
         let what = format!("{verb}d hunk {} of {path}", hunk.hunk_idx + 1);
-        self.run_op(verb, Some(what), |repo_path| op(repo_path, hunk));
+        self.run_op(verb, Some(what), &[path], |repo_path| op(repo_path, hunk));
     }
 
     /// Reload both diffs from disk (synchronously, after a mutation) and

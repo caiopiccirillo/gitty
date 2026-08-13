@@ -121,6 +121,7 @@ const HELP_LINES: &[&str] = &[
     "  Tab         Classic: switch the shown side. Split: cycle the panes",
     "  c           Open the commit message box",
     "  m           Toggle the classic / split layout",
+    "  z           Undo the last staging or discard",
     "  [ ]         Narrow / widen the files pane",
     "",
     "Files pane",
@@ -519,16 +520,16 @@ fn status_bar(app: &App) -> Paragraph<'static> {
 fn hints(app: &App) -> &'static str {
     match (app.focus, app.side) {
         (Focus::Files, Side::Unstaged) => {
-            " Tab · j/k · space stage · d discard · h/l · m layout · [/] width · c commit · ? help · q quit "
+            " Tab · j/k · space stage · d discard · h/l · m layout · [/] width · z undo · c commit · ? help · q quit "
         }
         (Focus::Files, Side::Staged) => {
-            " Tab · j/k · space unstage · d discard · h/l · m layout · [/] width · c commit · ? help · q quit "
+            " Tab · j/k · space unstage · d discard · h/l · m layout · [/] width · z undo · c commit · ? help · q quit "
         }
         (Focus::Diff, Side::Unstaged) => {
-            " j/k change · n/p hunk · v select · space/s stage · d discard · m layout · c commit · ? help · q quit "
+            " j/k change · n/p hunk · v select · space/s stage · d discard · z undo · m layout · c commit · ? help · q quit "
         }
         (Focus::Diff, Side::Staged) => {
-            " j/k change · n/p hunk · v select · space/u unstage · d discard · m layout · c commit · ? help · q quit "
+            " j/k change · n/p hunk · v select · space/u unstage · d discard · z undo · m layout · c commit · ? help · q quit "
         }
     }
 }

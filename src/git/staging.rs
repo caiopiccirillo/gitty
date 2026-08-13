@@ -299,7 +299,7 @@ fn discard_content(file: &FileDiff, hunk: &Hunk, selection: &Selection<'_>) -> R
 }
 
 /// The raw bytes of the worktree file at `rela`, or `None` if it's missing.
-fn worktree_content(repo: &gix::Repository, rela: &str) -> Option<Vec<u8>> {
+pub(super) fn worktree_content(repo: &gix::Repository, rela: &str) -> Option<Vec<u8>> {
     let full = repo
         .workdir()?
         .join(gix::path::from_bstr(BStr::new(rela.as_bytes())));
@@ -314,7 +314,7 @@ fn worktree_content(repo: &gix::Repository, rela: &str) -> Option<Vec<u8>> {
 ///   deleted instead of written.
 /// * `mode`: the mode of the side being restored to, which decides between a
 ///   regular file, an executable and a symlink.
-fn write_worktree(
+pub(super) fn write_worktree(
     repo: &gix::Repository,
     rela: &str,
     content: &[u8],
@@ -345,7 +345,7 @@ fn write_worktree(
 }
 
 /// The content of the blob with `id`.
-fn blob_content(repo: &gix::Repository, id: gix::ObjectId) -> Result<Vec<u8>> {
+pub(super) fn blob_content(repo: &gix::Repository, id: gix::ObjectId) -> Result<Vec<u8>> {
     Ok(repo.find_object(id)?.into_blob().data.clone())
 }
 
@@ -536,7 +536,7 @@ fn point_entry_at(entry: &mut gix::index::Entry, id: gix::ObjectId) {
 }
 
 /// Insert a fresh entry, or update an existing one in place.
-fn upsert_entry(
+pub(super) fn upsert_entry(
     index: &mut gix::index::File,
     path: &BStr,
     id: gix::ObjectId,
