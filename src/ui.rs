@@ -340,9 +340,14 @@ fn status_bar(app: &App) -> Paragraph<'static> {
             Style::new().fg(Color::Yellow),
         )
     } else if let Some(prompt) = &app.discard_confirm {
+        // A destructive action is the most salient thing on screen: the
+        // prompt is rendered as a reversed red block, unlike every hint.
         Span::styled(
             format!(" discard {}? y confirm · n cancel ", prompt.what),
-            Style::new().fg(Color::Yellow),
+            Style::new()
+                .fg(Color::Black)
+                .bg(Color::Red)
+                .add_modifier(Modifier::BOLD),
         )
     } else if let Some(range) = app.selection_range() {
         let verb = match app.side {
@@ -633,10 +638,16 @@ mod tests {
                 side: Side::Unstaged,
             },
         });
-        let (screen, _) = render_app(&mut app, 80, 10);
+        let (screen, buffer) = render_app(&mut app, 80, 10);
         assert!(screen.contains("discard hunk 1 of a.txt?"));
         assert!(screen.contains("y confirm"));
         assert!(screen.contains("n cancel"));
+        // The prompt is a reversed red block on the status bar row.
+        let last = buffer.area().height - 1;
+        assert!(
+            (0..80).any(|x| buffer[(x, last)].bg == Color::Red),
+            "discard prompt uses a red background"
+        );
     }
 
     #[test]
