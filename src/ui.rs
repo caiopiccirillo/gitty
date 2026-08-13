@@ -79,6 +79,24 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
 }
 
+/// The startup frame shown while the initial diff load is running, so a
+/// slow load never leaves the terminal blank.
+pub fn render_loading(frame: &mut Frame) {
+    let area = frame.area();
+    let text = " Loading diffs… ";
+    let width = u16::try_from(text.chars().count()).unwrap_or(u16::MAX);
+    let rect = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(1) / 2,
+        width,
+        1,
+    );
+    frame.render_widget(
+        Paragraph::new(text).style(Style::new().fg(theme::HINT)),
+        rect,
+    );
+}
+
 /// The files pane plus one diff pane, filling the whole width.
 fn render_split_side(frame: &mut Frame, app: &mut App, main_area: Rect, side: Side) {
     let files = app.files_percent;
@@ -1223,5 +1241,22 @@ mod tests {
         press(&mut app, KeyCode::Tab);
         let (screen, _) = render_app(&mut app, 80, 10);
         assert!(screen.contains("no changes on this side"));
+    }
+
+    #[test]
+    fn loading_frame_shows_feedback_before_the_diffs_are_ready() {
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(render_loading).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let screen: String = buffer
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect();
+        assert!(
+            screen.contains("Loading diffs"),
+            "the loading frame renders before App::load"
+        );
     }
 }
