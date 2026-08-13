@@ -5,3 +5,5 @@
   changed line.
 - Scroll the wheel over the files pane to move the selection, or over a
   diff pane to scroll it (the pane under the wheel gains focus).
+- Click (or drag) a diff pane's scrollbar to jump to that position of the
+  file.

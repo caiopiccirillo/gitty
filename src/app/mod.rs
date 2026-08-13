@@ -1531,6 +1531,57 @@ mod tests {
     }
 
     #[test]
+    fn mouse_click_on_the_scrollbar_jumps_through_the_content() {
+        // 100 added lines: every display line is a changed line.
+        let line = |i: usize| DiffLine {
+            kind: LineKind::Addition,
+            content: String::new(),
+            file_idx: 0,
+            hunk_idx: Some(i),
+        };
+        let view = DiffView {
+            lines: (0..100).map(line).collect(),
+            files: vec![FileInfo {
+                path: "long.txt".into(),
+                status: FileStatus::Modified,
+            }],
+        };
+        let mut app = App::new(view, DiffView::default(), PathBuf::from("/unused"));
+        app.files_rect = Rect::new(0, 0, 24, 10);
+        // Diff rect x=25..79: the scrollbar column is x=78 (one in from
+        // the border), inner rows y=1..8.
+        app.diff_rects[Side::Unstaged.index()] = Some(Rect::new(25, 0, 55, 10));
+        app.set_viewport_height(8);
+
+        // Click the bottom of the scrollbar: full scroll, cursor at the end.
+        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 78, 8));
+        assert_eq!(app.focus, Focus::Diff);
+        assert_eq!(app.scroll(), 92, "max scroll (100 - 8)");
+        assert_eq!(app.cursor(), 99);
+
+        // Click the top: back to the first line.
+        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 78, 1));
+        assert_eq!(app.scroll(), 0);
+        assert_eq!(app.cursor(), 0);
+
+        // A drag mid-track scrolls proportionally.
+        app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 78, 5));
+        assert_eq!(app.scroll(), 52, "4 of 7 steps through 92 lines");
+    }
+
+    #[test]
+    fn mouse_clicks_elsewhere_leave_the_scrollbar_alone() {
+        let mut app = test_app();
+        app.files_rect = Rect::new(0, 0, 24, 10);
+        app.diff_rects[Side::Unstaged.index()] = Some(Rect::new(25, 0, 55, 10));
+        // A short diff does not overflow: the scrollbar column is inert
+        // and the click behaves like any other diff click.
+        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 78, 8));
+        assert_eq!(app.focus, Focus::Diff);
+        assert_eq!(app.scroll(), 0, "no scroll for a non-overflowing pane");
+    }
+
+    #[test]
     fn mouse_click_switches_to_the_other_pane() {
         let mut app = split_app();
         app.files_rect = Rect::new(0, 0, 30, 10);
