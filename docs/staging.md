@@ -29,6 +29,13 @@ staging or unstaging.
   like `git checkout HEAD -- <path>` for that hunk or file.
 - An untracked (or newly added) file is removed entirely.
 
+## Undoing
+
+`z` undoes the last staging, unstaging or discard: the affected files'
+index and worktree contents are restored to what they were right before
+that operation. Only mutations made inside gitty can be undone (the last
+64 of them), and the undo stack is per session.
+
 Discarding is destructive: confirmed discards cannot be undone by gitty.
 
 ## Committing

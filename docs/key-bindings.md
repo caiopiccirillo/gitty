@@ -10,6 +10,7 @@
 | `c`            | Open the commit message box         |
 | `m`            | Toggle between the classic and split layouts |
 | `[` / `]`      | Narrow / widen the files pane       |
+| `z`            | Undo the last staging or discard    |
 
 ## Commit message box
 

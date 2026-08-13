@@ -16,6 +16,7 @@ mod model;
 mod render;
 mod splice;
 mod staging;
+mod undo;
 
 pub use commit::commit;
 pub use diff::{load_staged_diff, load_unstaged_diff};
@@ -24,6 +25,7 @@ pub use staging::{
     discard_staged_lines, stage_file, stage_hunk, stage_lines, unstage_file, unstage_hunk,
     unstage_lines,
 };
+pub use undo::{FileSnapshot, restore_files, snapshot_file};
 
 use std::path::Path;
 
