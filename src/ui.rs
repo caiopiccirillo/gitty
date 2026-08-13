@@ -257,7 +257,7 @@ fn render_files(frame: &mut Frame, app: &mut App, area: Rect) {
     let block = pane_block(title, focused);
 
     if items.is_empty() {
-        let empty = Paragraph::new("no changes")
+        let empty = Paragraph::new("no changes — ? help")
             .style(Style::new().fg(theme::EMPTY))
             .block(block);
         frame.render_widget(empty, area);
@@ -293,7 +293,7 @@ fn render_diff(frame: &mut Frame, app: &App, area: Rect, side: Side) {
     let lines = diff_lines(app, side);
 
     if lines.is_empty() {
-        let empty = Paragraph::new("no changes")
+        let empty = Paragraph::new("no changes on this side")
             .style(Style::new().fg(theme::EMPTY))
             .block(block);
         frame.render_widget(empty, area);
@@ -1202,5 +1202,26 @@ mod tests {
         app.files_percent = 20;
         let (_, buffer) = render_app(&mut app, 80, 10);
         assert_eq!(buffer[(17, 1)].symbol(), "@", "diff starts at column 17");
+    }
+
+    #[test]
+    fn empty_states_point_forward() {
+        let mut app = App::new(
+            DiffView::default(),
+            DiffView::default(),
+            PathBuf::from("/unused"),
+        );
+        let (screen, _) = render_app(&mut app, 80, 10);
+        assert!(
+            screen.contains("no changes — ? help"),
+            "the files pane suggests the next action"
+        );
+
+        // A populated unstaged side with an empty staged side: the staged
+        // diff pane names its own emptiness.
+        let mut app = sample_app();
+        press(&mut app, KeyCode::Tab);
+        let (screen, _) = render_app(&mut app, 80, 10);
+        assert!(screen.contains("no changes on this side"));
     }
 }
