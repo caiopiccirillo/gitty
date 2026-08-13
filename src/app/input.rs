@@ -335,18 +335,26 @@ impl App {
 
     fn cycle_focus(&mut self) {
         match self.mode {
-            // The classic layout swaps which side is shown and resets the
-            // files selection, as before.
+            // The classic layout swaps which side is shown. Each side
+            // remembers its files selection and its pane cursor, so Tab
+            // restores the user's place instead of resetting it.
             Mode::Classic => {
+                self.saved_rows[self.side.index()] = self.selected_row;
                 self.side = self.side.other();
                 self.focus = Focus::Files;
-                self.selected_row = 0;
                 self.rebuild_tree();
-                let pane = self.pane_mut();
-                pane.cursor = 0;
-                pane.scroll = 0;
-                pane.visual_anchor = None;
-                self.snap_to_first_change();
+                self.selected_row = if self.tree.is_empty() {
+                    0
+                } else {
+                    self.saved_rows[self.side.index()].min(self.tree.len() - 1)
+                };
+                self.files_state.select(Some(self.selected_row));
+                if self.pane().cursor == 0 {
+                    // First visit to this side: land on the first change.
+                    self.snap_to_first_change();
+                } else {
+                    self.clamp_cursor();
+                }
             }
             // The split layout cycles the focus through the visible panes
             // (files, then the diff panes left to right), skipping sides
