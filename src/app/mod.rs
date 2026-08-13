@@ -112,8 +112,10 @@ pub struct App {
     pub commit_input: Option<CommitInput>,
     /// A destructive discard awaiting confirmation (`d` then `y`).
     pub discard_confirm: Option<DiscardPrompt>,
-    /// One-off feedback shown in the status bar (e.g. staging errors).
-    pub message: Option<String>,
+    /// One-off feedback shown in the status bar (e.g. staging results). It
+    /// persists until the next operation, so failures stay visible while
+    /// the user navigates.
+    pub message: Option<Message>,
     viewport_height: usize,
     repo_path: PathBuf,
     pub should_quit: bool,
@@ -406,7 +408,9 @@ impl App {
         else {
             return;
         };
-        self.run_op(verb, |repo_path| op(repo_path, &file));
+        self.run_op(verb, Some(format!("{verb}d {}", file.path)), |repo_path| {
+            op(repo_path, &file)
+        });
     }
 
     /// Stage all files beneath the selected directory (files pane, unstaged side).
@@ -441,9 +445,11 @@ impl App {
         op: impl Fn(&Path, &FileInfo) -> Result<()>,
     ) {
         let files = self.dir_files(side, dir);
-        self.run_op(verb, |repo_path| {
-            files.iter().try_for_each(|f| op(repo_path, f))
-        });
+        self.run_op(
+            verb,
+            Some(format!("{verb}d directory {dir}/")),
+            |repo_path| files.iter().try_for_each(|f| op(repo_path, f)),
+        );
     }
 
     /// Range of display lines covered by the visual selection, if active.
@@ -496,23 +502,37 @@ impl App {
     /// Stage only the visually selected lines (unstaged side).
     pub fn stage_selected_lines(&mut self) {
         let Some((hunk, selected)) = self.selected_lines() else {
-            self.message = Some("no changed lines selected".into());
+            self.message = Some(Message::info("no changed lines selected"));
             return;
         };
-        self.run_op("stage", |repo_path| {
-            git::stage_lines(repo_path, hunk.file_idx, hunk.hunk_idx, &selected)
-        });
+        let path = self.unstaged.files[hunk.file_idx].path.clone();
+        let count = selected.additions.len() + selected.deletions.len();
+        self.run_op(
+            "stage",
+            Some(format!(
+                "staged {count} line(s) of hunk {} in {path}",
+                hunk.hunk_idx + 1
+            )),
+            |repo_path| git::stage_lines(repo_path, hunk.file_idx, hunk.hunk_idx, &selected),
+        );
     }
 
     /// Unstage only the visually selected lines (staged side).
     pub fn unstage_selected_lines(&mut self) {
         let Some((hunk, selected)) = self.selected_lines() else {
-            self.message = Some("no changed lines selected".into());
+            self.message = Some(Message::info("no changed lines selected"));
             return;
         };
-        self.run_op("unstage", |repo_path| {
-            git::unstage_lines(repo_path, hunk.file_idx, hunk.hunk_idx, &selected)
-        });
+        let path = self.staged.files[hunk.file_idx].path.clone();
+        let count = selected.additions.len() + selected.deletions.len();
+        self.run_op(
+            "unstage",
+            Some(format!(
+                "unstaged {count} line(s) of hunk {} in {path}",
+                hunk.hunk_idx + 1
+            )),
+            |repo_path| git::unstage_lines(repo_path, hunk.file_idx, hunk.hunk_idx, &selected),
+        );
     }
 
     /// Open the discard prompt for what's under the cursor (`d`).
@@ -526,7 +546,7 @@ impl App {
                         .and_then(|i| self.diff_of(side).files.get(i))
                         .cloned()
                     else {
-                        self.message = Some("nothing to discard on this side".into());
+                        self.message = Some(Message::info("nothing to discard on this side"));
                         return;
                     };
                     DiscardAction::File { file, side }
@@ -536,7 +556,7 @@ impl App {
             },
             Focus::Diff => {
                 let Some(hunk) = self.current_hunk() else {
-                    self.message = Some("no hunk under the cursor".into());
+                    self.message = Some(Message::info("no hunk under the cursor"));
                     return;
                 };
                 match self.selected_lines() {
@@ -546,7 +566,7 @@ impl App {
                         side,
                     },
                     None if self.pane().visual_anchor.is_some() => {
-                        self.message = Some("no changed lines selected".into());
+                        self.message = Some(Message::info("no changed lines selected"));
                         return;
                     }
                     None => DiscardAction::Hunk { hunk, side },
@@ -586,6 +606,7 @@ impl App {
         };
         // Directories are resolved to their files here, where the diffs are
         // available; the operation itself needs no app state.
+        let what = prompt.what;
         let action = match prompt.action {
             DiscardAction::Dir { path, side } => {
                 let files = self.dir_files(side, &path);
@@ -593,24 +614,33 @@ impl App {
             }
             other => other,
         };
-        self.run_op("discard", |repo_path| execute_discard(repo_path, action));
+        self.run_op("discard", Some(format!("discarded {what}")), |repo_path| {
+            execute_discard(repo_path, action)
+        });
     }
 
-    /// Run a git operation against the repo and refresh, showing failures
-    /// in the status bar.
-    fn run_op(&mut self, verb: &str, op: impl FnOnce(&Path) -> Result<()>) {
+    /// Run a git operation against the repo and refresh, showing the
+    /// outcome (success or failure) in the status bar.
+    fn run_op(
+        &mut self,
+        verb: &str,
+        success: Option<String>,
+        op: impl FnOnce(&Path) -> Result<()>,
+    ) {
         self.message = match op(&self.repo_path).and_then(|()| self.refresh()) {
-            Ok(()) => None,
-            Err(e) => Some(format!("{verb} failed: {e}")),
+            Ok(()) => success.map(Message::success),
+            Err(e) => Some(Message::error(format!("{verb} failed: {e}"))),
         };
     }
 
     fn with_hunk(&mut self, verb: &str, op: impl FnOnce(&Path, HunkId) -> Result<()>) {
         let Some(hunk) = self.current_hunk() else {
-            self.message = Some("no hunk under the cursor".into());
+            self.message = Some(Message::info("no hunk under the cursor"));
             return;
         };
-        self.run_op(verb, |repo_path| op(repo_path, hunk));
+        let path = self.diff_of(self.side).files[hunk.file_idx].path.clone();
+        let what = format!("{verb}d hunk {} of {path}", hunk.hunk_idx + 1);
+        self.run_op(verb, Some(what), |repo_path| op(repo_path, hunk));
     }
 
     /// Reload both diffs from disk (synchronously, after a mutation) and
@@ -656,7 +686,7 @@ impl App {
     /// Open the commit message box (`c`), if there is anything staged.
     pub fn open_commit(&mut self) {
         if self.staged.files.is_empty() {
-            self.message = Some("nothing staged".into());
+            self.message = Some(Message::info("nothing staged"));
         } else {
             self.commit_input = Some(CommitInput::default());
         }
@@ -669,14 +699,14 @@ impl App {
         };
         let message = input.text.trim().to_string();
         if message.is_empty() {
-            self.message = Some("empty commit message".into());
+            self.message = Some(Message::error("empty commit message"));
             return;
         }
         self.message = match git::commit(&self.repo_path, &message)
             .and_then(|short| self.refresh().map(|()| format!("committed {short}")))
         {
-            Ok(msg) => Some(msg),
-            Err(e) => Some(format!("commit failed: {e}")),
+            Ok(msg) => Some(Message::success(msg)),
+            Err(e) => Some(Message::error(format!("commit failed: {e}"))),
         };
     }
 
@@ -794,6 +824,47 @@ enum NodeIdentity {
 pub struct CommitInput {
     pub text: String,
     pub cursor: usize,
+}
+
+/// Severity of a [`Message`] shown in the status bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Severity {
+    Info,
+    Success,
+    Error,
+}
+
+/// One-off feedback shown in the status bar (staging results, failures, ...).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Message {
+    pub text: String,
+    pub severity: Severity,
+}
+
+impl Message {
+    #[must_use]
+    pub fn info(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            severity: Severity::Info,
+        }
+    }
+
+    #[must_use]
+    pub fn success(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            severity: Severity::Success,
+        }
+    }
+
+    #[must_use]
+    pub fn error(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            severity: Severity::Error,
+        }
+    }
 }
 
 /// A destructive discard awaiting confirmation.
@@ -1075,9 +1146,9 @@ mod tests {
         press(&mut app, KeyCode::Char('y'));
         assert!(app.discard_confirm.is_none());
         assert!(
-            app.message
-                .as_deref()
-                .is_some_and(|m| m.starts_with("discard failed"))
+            app.message.as_ref().is_some_and(
+                |m| m.severity == Severity::Error && m.text.starts_with("discard failed")
+            )
         );
     }
 
@@ -1210,8 +1281,8 @@ mod tests {
         press(&mut app, KeyCode::Char(' '));
         assert!(
             app.message
-                .as_deref()
-                .is_some_and(|m| m.starts_with("unstage failed"))
+                .as_ref()
+                .is_some_and(|m| m.text.starts_with("unstage failed"))
         );
 
         // a.txt is unstaged-only: space dispatches a stage.
@@ -1219,8 +1290,8 @@ mod tests {
         press(&mut app, KeyCode::Char(' '));
         assert!(
             app.message
-                .as_deref()
-                .is_some_and(|m| m.starts_with("stage failed"))
+                .as_ref()
+                .is_some_and(|m| m.text.starts_with("stage failed"))
         );
     }
 

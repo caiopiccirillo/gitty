@@ -13,7 +13,6 @@ use super::{App, DiffLine, Focus, LineKind, Mode, Node, Range, Side, tree};
 
 impl App {
     pub fn handle_key(&mut self, key: KeyEvent) {
-        self.message = None;
         if self.commit_input.is_some() {
             self.handle_commit_key(key);
             return;
@@ -38,7 +37,6 @@ impl App {
 
     /// Handle a mouse event against the last rendered layout.
     pub fn handle_mouse(&mut self, event: MouseEvent) {
-        self.message = None;
         let position = Position::new(event.column, event.row);
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => self.mouse_click(position),

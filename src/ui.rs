@@ -9,7 +9,7 @@ use ratatui::{
     widgets::{Block, Clear, HighlightSpacing, List, ListItem, Paragraph},
 };
 
-use crate::app::{App, CommitInput, Focus, Mode, Side};
+use crate::app::{App, CommitInput, Focus, Mode, Severity, Side};
 use crate::diff::{FileInfo, FileStatus, HunkId, LineKind};
 use crate::tree::Node;
 
@@ -358,7 +358,14 @@ fn status_bar(app: &App) -> Paragraph<'static> {
         )
     } else {
         match app.message {
-            Some(ref message) => Span::styled(format!(" {message} "), Style::new().fg(Color::Red)),
+            Some(ref message) => {
+                let color = match message.severity {
+                    Severity::Info => Color::Yellow,
+                    Severity::Success => Color::Green,
+                    Severity::Error => Color::Red,
+                };
+                Span::styled(format!(" {} ", message.text), Style::new().fg(color))
+            }
             None => Span::styled(hints(app), Style::new().fg(Color::DarkGray)),
         }
     };
@@ -431,7 +438,7 @@ fn style_for(kind: LineKind) -> Style {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::{DiscardAction, DiscardPrompt};
+    use crate::app::{DiscardAction, DiscardPrompt, Message};
     use crate::diff::{DiffLine, DiffView, FileInfo};
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::{Terminal, backend::TestBackend};
@@ -865,5 +872,43 @@ mod tests {
         assert!(screen.contains("Staged (0)"));
         assert!(screen.contains("no changes"));
         assert!(screen.contains("staged · file 0/0"));
+    }
+
+    #[test]
+    fn status_bar_colors_messages_by_severity() {
+        let mut app = sample_app();
+        app.message = Some(Message::error("stage failed"));
+        let (_, buffer) = render_app(&mut app, 80, 10);
+        let last = buffer.area().height - 1;
+        assert!(
+            (0..80).any(|x| buffer[(x, last)].fg == Color::Red),
+            "errors render red"
+        );
+
+        app.message = Some(Message::success("staged f.txt"));
+        let (_, buffer) = render_app(&mut app, 80, 10);
+        assert!(
+            (0..80).any(|x| buffer[(x, last)].fg == Color::Green),
+            "success renders green"
+        );
+    }
+
+    #[test]
+    fn message_persists_across_navigation() {
+        let mut app = sample_app();
+        app.message = Some(Message::error("stage failed"));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('k'));
+        assert!(app.message.is_some(), "navigation keeps the message");
+
+        // The next operation (here: a failing stage) overwrites it.
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('s'));
+        assert!(
+            app.message
+                .as_ref()
+                .is_some_and(|m| m.text.starts_with("stage failed:")),
+            "the next operation overwrites it"
+        );
     }
 }

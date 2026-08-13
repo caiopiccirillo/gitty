@@ -7,13 +7,24 @@ use common::{BASE, commit_file};
 use git2::Repository;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use gitty::app::{App, Focus};
+use gitty::app::{App, Focus, Severity};
 use gitty::diff::{FileStatus, LineKind, SelectedLines};
 use gitty::git::{
     load_staged_diff, load_unstaged_diff, stage_file, stage_hunk, stage_lines, unstage_file,
     unstage_hunk, unstage_lines,
 };
 use gitty::tree::Node;
+
+/// Successful operations leave a success message in the status bar.
+fn assert_success(app: &App) {
+    assert!(
+        app.message
+            .as_ref()
+            .is_some_and(|m| m.severity == Severity::Success),
+        "expected a success message, got {:?}",
+        app.message
+    );
+}
 
 /// Repo with `f.txt` committed, then changed at lines 1 and 10 (two hunks).
 fn repo_with_two_hunks() -> (tempfile::TempDir, String) {
@@ -143,13 +154,13 @@ fn app_stages_a_file_from_the_files_pane() {
     let mut app = App::load(dir.path()).unwrap();
 
     app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
-    assert_eq!(app.message, None);
+    assert_success(&app);
     assert!(app.unstaged.files.is_empty());
     assert_eq!(app.staged.files.len(), 1);
 
     app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
-    assert_eq!(app.message, None);
+    assert_success(&app);
     assert!(app.staged.files.is_empty());
     assert_eq!(app.unstaged.files.len(), 1);
 }
@@ -273,7 +284,7 @@ fn app_stages_the_visually_selected_lines() {
     app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
     app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
 
-    assert_eq!(app.message, None);
+    assert_success(&app);
     assert_eq!(additions(&app.staged), vec!["L2"]);
     assert_eq!(additions(&app.unstaged), vec!["L4"]);
     assert_eq!(app.visual_anchor(), None, "selection cleared after staging");
@@ -294,14 +305,14 @@ fn app_stages_a_whole_directory() {
     assert!(matches!(app.selected_node(), Some(Node::Dir { .. })));
 
     app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
-    assert_eq!(app.message, None);
+    assert_success(&app);
     assert!(app.unstaged.files.is_empty());
     assert_eq!(app.staged.files.len(), 2);
 
     app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     assert!(matches!(app.selected_node(), Some(Node::Dir { .. })));
     app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
-    assert_eq!(app.message, None);
+    assert_success(&app);
     assert!(app.staged.files.is_empty());
     assert_eq!(app.unstaged.files.len(), 2);
 }
@@ -315,14 +326,14 @@ fn app_stages_and_unstages_the_hunk_under_the_cursor() {
     // Stage hunk 0 (cursor starts on the first hunk header).
     app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
-    assert_eq!(app.message, None);
+    assert_success(&app);
     assert_eq!(app.unstaged.hunks().len(), 1);
     assert_eq!(app.staged.hunks().len(), 1);
 
     // Stage the remaining hunk: the file leaves the unstaged list and the
     // focus falls back to the files pane.
     app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
-    assert_eq!(app.message, None);
+    assert_success(&app);
     assert!(app.unstaged.files.is_empty());
     assert_eq!(app.staged.hunks().len(), 2);
     assert_eq!(app.focus, Focus::Files);
@@ -331,7 +342,7 @@ fn app_stages_and_unstages_the_hunk_under_the_cursor() {
     app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
-    assert_eq!(app.message, None);
+    assert_success(&app);
     assert_eq!(app.staged.hunks().len(), 1);
     assert_eq!(app.unstaged.hunks().len(), 1);
 }
