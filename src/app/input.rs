@@ -55,6 +55,8 @@ impl App {
         let position = Position::new(event.column, event.row);
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => self.mouse_click(position),
+            // Dragging over a scrollbar (button held) scrolls like a click.
+            MouseEventKind::Drag(MouseButton::Left) => self.mouse_drag(position),
             MouseEventKind::ScrollUp => self.mouse_scroll(position, 1),
             MouseEventKind::ScrollDown => self.mouse_scroll(position, -1),
             _ => {}
@@ -80,10 +82,33 @@ impl App {
             .find(|&side| self.diff_rects[side.index()].is_some_and(|r| r.contains(position)))
     }
 
+    /// The overflowing pane whose scrollbar column is under `position`.
+    fn scrollbar_at(&self, position: Position) -> Option<Side> {
+        [Side::Unstaged, Side::Staged].into_iter().find(|&side| {
+            let Some(rect) = self.diff_rects[side.index()] else {
+                return false;
+            };
+            // The scrollbar sits in the inner last column: one in from
+            // the right border, and one in from the top and bottom.
+            let column = rect.x + rect.width.saturating_sub(2);
+            let track_len = usize::from(rect.height.saturating_sub(2));
+            position.x == column
+                && position.y > rect.y
+                && position.y < rect.y + rect.height.saturating_sub(1)
+                && self.display_lines_for(side).len() > track_len
+        })
+    }
+
     fn mouse_click(&mut self, position: Position) {
         if let Some(row) = self.row_at(position) {
             self.focus = Focus::Files;
             self.select_row(row);
+            return;
+        }
+        if let Some(side) = self.scrollbar_at(position) {
+            self.side = side;
+            self.focus = Focus::Diff;
+            self.scroll_pane_to(side, position);
             return;
         }
         let Some(side) = self.side_at(position) else {
@@ -97,6 +122,35 @@ impl App {
             return;
         };
         self.snap_cursor_to_nearest(side, y + self.pane_of(side).scroll);
+    }
+
+    /// Drag events: only a scrollbar column reacts while the button is
+    /// held; everywhere else a drag is a no-op.
+    fn mouse_drag(&mut self, position: Position) {
+        if let Some(side) = self.scrollbar_at(position) {
+            self.scroll_pane_to(side, position);
+        }
+    }
+
+    /// Scroll the pane so the clicked scrollbar row lands at that
+    /// proportion of the content, and move the cursor to the changed line
+    /// nearest to the click.
+    fn scroll_pane_to(&mut self, side: Side, position: Position) {
+        let rect = self.diff_rects[side.index()].expect("found above");
+        let track_len = usize::from(rect.height.saturating_sub(2));
+        let Some(offset) = usize::from(position.y)
+            .checked_sub(usize::from(rect.y) + 1)
+            .filter(|&offset| offset < track_len)
+        else {
+            return;
+        };
+        let total = self.display_lines_for(side).len();
+        let max_scroll = total.saturating_sub(track_len);
+        let steps = track_len.saturating_sub(1).max(1);
+        let scroll = offset.saturating_mul(max_scroll) / steps;
+        self.pane_of_mut(side).scroll = scroll;
+        self.snap_cursor_to_nearest(side, scroll + offset);
+        self.clamp_cursor_for(side);
     }
 
     fn mouse_scroll(&mut self, position: Position, wheel_steps: isize) {

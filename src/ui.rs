@@ -1208,6 +1208,49 @@ mod tests {
     }
 
     #[test]
+    fn clicking_the_scrollbar_jumps_to_the_clicked_position() {
+        use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+        // 100 lines in a 10-row terminal: the scrollbar column is x=78,
+        // the track spans rows 1..7.
+        let line = |i: usize| DiffLine {
+            kind: LineKind::Addition,
+            content: format!("line {i}"),
+            file_idx: 0,
+            hunk_idx: None,
+        };
+        let view = DiffView {
+            lines: (0..100).map(line).collect(),
+            files: vec![FileInfo {
+                path: "long.txt".into(),
+                status: FileStatus::Modified,
+            }],
+        };
+        let mut app = App::new(view, DiffView::default(), PathBuf::from("/unused"));
+        let _ = render_app(&mut app, 80, 10);
+
+        // Click the bottom track row: the thumb lands there.
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 78,
+            row: 7,
+            modifiers: KeyModifiers::NONE,
+        });
+        let (_, buffer) = render_app(&mut app, 80, 10);
+        assert_eq!(buffer[(78, 7)].symbol(), "█", "thumb jumped to the bottom");
+
+        // Click the top track row: back to the start.
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 78,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        let (_, buffer) = render_app(&mut app, 80, 10);
+        assert_eq!(buffer[(78, 1)].symbol(), "█", "thumb back at the top");
+    }
+
+    #[test]
     fn files_pane_width_follows_the_resize_setting() {
         let mut app = sample_app();
         // Widen to 50%: the diff pane starts at column 40.
