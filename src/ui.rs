@@ -69,7 +69,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     if app.help_open {
         render_help(frame);
     } else if let Some(ref input) = app.commit_input {
-        render_commit_box(frame, input);
+        render_commit_box(frame, input, app.staged.files.len());
     }
 }
 
@@ -118,7 +118,10 @@ const HELP_LINES: &[&str] = &[
     "Commit box",
     "  Enter       Commit",
     "  Esc         Cancel",
-    "  Left/Right, Home/End, Backspace, Ctrl+U   Edit the message",
+    "  Left/Right, Home/End, Backspace, Delete   Move and edit",
+    "  Ctrl+A/E    Jump to the start / end",
+    "  Ctrl+W, Alt+Backspace   Delete the previous word",
+    "  Ctrl+K, Ctrl+U          Delete to the end / clear all",
 ];
 
 /// The centered `?` help overlay with all key bindings.
@@ -142,10 +145,11 @@ fn render_help(frame: &mut Frame) {
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-/// The centered commit-message box, with the terminal cursor inside it.
-fn render_commit_box(frame: &mut Frame, input: &CommitInput) {
+/// The centered commit-message box, with the terminal cursor inside it. The
+/// title shows how many files the commit will contain.
+fn render_commit_box(frame: &mut Frame, input: &CommitInput, staged_files: usize) {
     let area = frame.area();
-    let width = 60.min(area.width);
+    let width = 70.min(area.width);
     let height = 3.min(area.height);
     let rect = Rect::new(
         area.x + area.width.saturating_sub(width) / 2,
@@ -154,7 +158,7 @@ fn render_commit_box(frame: &mut Frame, input: &CommitInput) {
         height,
     );
     frame.render_widget(Clear, rect);
-    let block = Block::bordered().title(" Commit message ");
+    let block = Block::bordered().title(format!(" Commit message ({staged_files} files staged) "));
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
 
@@ -991,6 +995,7 @@ mod tests {
         });
         let (screen, _) = render_app(&mut app, 80, 10);
         assert!(screen.contains("Commit message"));
+        assert!(screen.contains("0 files staged"));
         assert!(screen.contains("my message"));
         assert!(screen.contains("Enter commit"));
     }
