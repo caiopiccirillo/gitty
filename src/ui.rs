@@ -4,13 +4,14 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Clear, HighlightSpacing, List, ListItem, Paragraph},
 };
 
 use crate::app::{App, CommitInput, Focus, Mode, Severity, Side};
 use crate::diff::{FileInfo, FileStatus, HunkId, LineKind};
+use crate::theme;
 use crate::tree::Node;
 
 pub fn render(frame: &mut Frame, app: &mut App) {
@@ -138,7 +139,7 @@ fn render_help(frame: &mut Frame) {
     frame.render_widget(Clear, rect);
     let block = Block::bordered()
         .title(" Help (? or q to close) ")
-        .border_style(Style::new().fg(Color::White));
+        .border_style(Style::new().fg(theme::PANE_BORDER_FOCUSED));
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
     let lines: Vec<Line> = HELP_LINES.iter().copied().map(Line::from).collect();
@@ -248,7 +249,7 @@ fn render_files(frame: &mut Frame, app: &mut App, area: Rect) {
 
     if items.is_empty() {
         let empty = Paragraph::new("no changes")
-            .style(Style::new().fg(Color::DarkGray))
+            .style(Style::new().fg(theme::EMPTY))
             .block(block);
         frame.render_widget(empty, area);
         return;
@@ -257,7 +258,7 @@ fn render_files(frame: &mut Frame, app: &mut App, area: Rect) {
     // Stateful rendering keeps the selection visible by scrolling the list.
     let list = List::new(items)
         .block(block)
-        .highlight_style(Style::new().bg(Color::DarkGray))
+        .highlight_style(Style::new().bg(theme::SELECTED_BG))
         .highlight_symbol("")
         .highlight_spacing(HighlightSpacing::Never);
     frame.render_stateful_widget(list, area, &mut app.files_state);
@@ -284,7 +285,7 @@ fn render_diff(frame: &mut Frame, app: &App, area: Rect, side: Side) {
 
     if lines.is_empty() {
         let empty = Paragraph::new("no changes")
-            .style(Style::new().fg(Color::DarkGray))
+            .style(Style::new().fg(theme::EMPTY))
             .block(block);
         frame.render_widget(empty, area);
         return;
@@ -326,9 +327,9 @@ fn render_scrollbar(frame: &mut Frame, inner: Rect, scroll: usize, total: usize)
     let lines: Vec<Line> = (0..track)
         .map(|row| {
             let (symbol, style) = if (start..start + thumb).contains(&row) {
-                ("█", Style::new().fg(Color::White))
+                ("█", Style::new().fg(theme::PANE_BORDER_FOCUSED))
             } else {
-                ("│", Style::new().fg(Color::DarkGray))
+                ("│", Style::new().fg(theme::PANE_BORDER))
             };
             Line::from(Span::styled(symbol, style))
         })
@@ -357,15 +358,16 @@ fn diff_lines(app: &App, side: Side) -> Vec<Line<'_>> {
             let mut spans: Vec<Span> = Vec::new();
             let mut push = |text: &str, mut style: Style| {
                 if selected {
-                    style = style.bg(Color::DarkGray);
+                    style = style.bg(theme::SELECTED_BG);
                     if line.kind == LineKind::Meta {
-                        // DarkGray on DarkGray would be unreadable.
-                        style = style.fg(Color::Gray);
+                        // The meta text is dark gray too; lighten it so the
+                        // selected row stays readable.
+                        style = style.fg(theme::SELECTION_END_BG);
                     }
                 }
                 if i == pane.cursor && pane.visual_anchor.is_some() {
                     // While selecting, the cursor end is a shade lighter.
-                    style = style.bg(Color::Gray);
+                    style = style.bg(theme::SELECTION_END_BG);
                 }
                 spans.push(Span::styled(text.to_string(), style));
             };
@@ -441,13 +443,13 @@ fn status_bar(app: &App) -> Paragraph<'static> {
         .unwrap_or_default();
     let left = Span::styled(
         format!(" {side_name} · {selection}{hunk_pos} "),
-        Style::new().fg(Color::Black).bg(Color::Gray),
+        Style::new().fg(theme::STATUS_FG).bg(theme::STATUS_BG),
     );
 
     let right = if app.commit_input.is_some() {
         Span::styled(
             " Enter commit · Esc cancel ",
-            Style::new().fg(Color::Yellow),
+            Style::new().fg(theme::MODIFIED),
         )
     } else if let Some(prompt) = &app.discard_confirm {
         // A destructive action is the most salient thing on screen: the
@@ -455,8 +457,8 @@ fn status_bar(app: &App) -> Paragraph<'static> {
         Span::styled(
             format!(" discard {}? y confirm · n cancel ", prompt.what),
             Style::new()
-                .fg(Color::Black)
-                .bg(Color::Red)
+                .fg(theme::STATUS_FG)
+                .bg(theme::DISCARD_BG)
                 .add_modifier(Modifier::BOLD),
         )
     } else if let Some(range) = app.selection_range() {
@@ -469,19 +471,19 @@ fn status_bar(app: &App) -> Paragraph<'static> {
                 " visual: {} line(s) · {verb} lines · v/Esc cancel ",
                 range.len()
             ),
-            Style::new().fg(Color::Yellow),
+            Style::new().fg(theme::MODIFIED),
         )
     } else {
         match app.message {
             Some(ref message) => {
                 let color = match message.severity {
-                    Severity::Info => Color::Yellow,
-                    Severity::Success => Color::Green,
-                    Severity::Error => Color::Red,
+                    Severity::Info => theme::MODIFIED,
+                    Severity::Success => theme::ADDED,
+                    Severity::Error => theme::ERROR,
                 };
                 Span::styled(format!(" {} ", message.text), Style::new().fg(color))
             }
-            None => Span::styled(hints(app), Style::new().fg(Color::DarkGray)),
+            None => Span::styled(hints(app), Style::new().fg(theme::HINT)),
         }
     };
     Paragraph::new(Line::from(vec![left, right]))
@@ -510,16 +512,16 @@ fn pane_block(title: String, focused: bool) -> Block<'static> {
     // white/dark-gray contrast is hard to tell apart.
     let (border, title_style) = if focused {
         (
-            Style::new().fg(Color::White),
+            Style::new().fg(theme::PANE_BORDER_FOCUSED),
             Style::new()
-                .fg(Color::Black)
-                .bg(Color::Gray)
+                .fg(theme::STATUS_FG)
+                .bg(theme::STATUS_BG)
                 .add_modifier(Modifier::BOLD),
         )
     } else {
         (
-            Style::new().fg(Color::DarkGray),
-            Style::new().fg(Color::DarkGray),
+            Style::new().fg(theme::PANE_BORDER),
+            Style::new().fg(theme::PANE_BORDER),
         )
     };
     Block::bordered()
@@ -527,14 +529,14 @@ fn pane_block(title: String, focused: bool) -> Block<'static> {
         .border_style(border)
 }
 
-fn status_badge(status: FileStatus) -> (&'static str, Color) {
+fn status_badge(status: FileStatus) -> (&'static str, ratatui::style::Color) {
     match status {
-        FileStatus::Added => ("A", Color::Green),
-        FileStatus::Deleted => ("D", Color::Red),
-        FileStatus::Modified => ("M", Color::Yellow),
-        FileStatus::Renamed => ("R", Color::Blue),
-        FileStatus::TypeChange => ("T", Color::Magenta),
-        FileStatus::Untracked => ("?", Color::Green),
+        FileStatus::Added => ("A", theme::ADDED),
+        FileStatus::Deleted => ("D", theme::DELETED),
+        FileStatus::Modified => ("M", theme::MODIFIED),
+        FileStatus::Renamed => ("R", theme::RENAMED),
+        FileStatus::TypeChange => ("T", theme::TYPE_CHANGE),
+        FileStatus::Untracked => ("?", theme::UNTRACKED),
     }
 }
 
@@ -548,19 +550,24 @@ fn merge_badge(staged: Option<&FileInfo>, unstaged: Option<&FileInfo>) -> Vec<Sp
         (s, u) => (s.unwrap_or(" "), u.unwrap_or(" ")),
     };
     vec![
-        Span::styled(staged.to_string(), Style::new().fg(Color::Green)),
-        Span::styled(format!("{unstaged} "), Style::new().fg(Color::Red)),
+        Span::styled(staged.to_string(), Style::new().fg(theme::MERGED_STAGED)),
+        Span::styled(
+            format!("{unstaged} "),
+            Style::new().fg(theme::MERGED_UNSTAGED),
+        ),
     ]
 }
 
 fn style_for(kind: LineKind) -> Style {
     match kind {
-        LineKind::FileHeader => Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-        LineKind::HunkHeader => Style::new().fg(Color::Cyan),
-        LineKind::Addition => Style::new().fg(Color::Green),
-        LineKind::Deletion => Style::new().fg(Color::Red),
+        LineKind::FileHeader => Style::new()
+            .fg(theme::FILE_HEADER)
+            .add_modifier(Modifier::BOLD),
+        LineKind::HunkHeader => Style::new().fg(theme::HUNK_HEADER),
+        LineKind::Addition => Style::new().fg(theme::ADDED),
+        LineKind::Deletion => Style::new().fg(theme::DELETED),
         LineKind::Context => Style::new(),
-        LineKind::Meta => Style::new().fg(Color::DarkGray),
+        LineKind::Meta => Style::new().fg(theme::META),
     }
 }
 
@@ -570,6 +577,7 @@ mod tests {
     use crate::app::{DiscardAction, DiscardPrompt, Message};
     use crate::diff::{DiffLine, DiffView, FileInfo};
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::style::Color;
     use ratatui::{Terminal, backend::TestBackend};
     use std::path::PathBuf;
 
@@ -998,6 +1006,31 @@ mod tests {
         assert!(screen.contains("0 files staged"));
         assert!(screen.contains("my message"));
         assert!(screen.contains("Enter commit"));
+    }
+
+    #[test]
+    fn untracked_files_use_a_distinct_badge_color() {
+        let view = DiffView {
+            lines: Vec::new(),
+            files: vec![
+                FileInfo {
+                    path: "new.txt".into(),
+                    status: FileStatus::Untracked,
+                },
+                FileInfo {
+                    path: "added.txt".into(),
+                    status: FileStatus::Added,
+                },
+            ],
+        };
+        let mut app = App::new(view, DiffView::default(), PathBuf::from("/unused"));
+        let (_, buffer) = render_app(&mut app, 80, 10);
+        // The badge letters sit in the first column of the files pane.
+        // Files sort by path: added.txt first, then new.txt.
+        assert_eq!(buffer[(1, 1)].symbol(), "A", "added badge letter");
+        assert_eq!(buffer[(1, 1)].fg, Color::Green);
+        assert_eq!(buffer[(1, 2)].symbol(), "?", "untracked badge letter");
+        assert_eq!(buffer[(1, 2)].fg, Color::Cyan);
     }
 
     #[test]

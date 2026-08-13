@@ -4,5 +4,6 @@ pub mod git;
 pub mod refresh;
 #[cfg(feature = "syntax")]
 pub mod syntax;
+pub mod theme;
 pub mod tree;
 pub mod ui;
