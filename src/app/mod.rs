@@ -1144,6 +1144,40 @@ mod tests {
     }
 
     #[test]
+    fn space_stages_and_unstages_in_the_diff_pane() {
+        let mut app = split_app();
+        // a.txt is selected; Tab lands in the unstaged diff pane, where
+        // space behaves like `s`.
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.focus, Focus::Diff);
+        assert_eq!(app.side, Side::Unstaged);
+        press(&mut app, KeyCode::Char(' '));
+        assert!(
+            app.message
+                .as_ref()
+                .is_some_and(|m| m.text.starts_with("stage failed")),
+            "space dispatched a stage"
+        );
+
+        // x.txt is staged-only; in its staged pane space behaves like `u`.
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.focus, Focus::Files);
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.side, Side::Staged);
+        press(&mut app, KeyCode::Char(' '));
+        assert!(
+            app.message
+                .as_ref()
+                .is_some_and(|m| m.text.starts_with("unstage failed")),
+            "space dispatched an unstage"
+        );
+    }
+
+    #[test]
     fn tab_switches_and_resets() {
         let mut app = test_app();
         press(&mut app, KeyCode::Char('j'));

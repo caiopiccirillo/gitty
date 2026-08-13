@@ -110,7 +110,7 @@ const HELP_LINES: &[&str] = &[
     "  g/G         Jump to the first / last changed line",
     "  n/p         Jump to the next / previous hunk",
     "  v           Start or end a visual line selection",
-    "  s, u        Stage / unstage the hunk or the selected lines",
+    "  s, u, Space Stage / unstage the hunk or the selected lines",
     "  d           Discard the hunk or the selected lines",
     "  h, Left     Back to the files pane",
     "  Esc         Cancel the selection, then back to files",
@@ -496,10 +496,10 @@ fn hints(app: &App) -> &'static str {
             " Tab · j/k · space unstage · d discard · h/l · m layout · c commit · ? help · q quit "
         }
         (Focus::Diff, Side::Unstaged) => {
-            " j/k change · n/p hunk · v select · s stage · d discard · m layout · c commit · ? help · q quit "
+            " j/k change · n/p hunk · v select · space/s stage · d discard · m layout · c commit · ? help · q quit "
         }
         (Focus::Diff, Side::Staged) => {
-            " j/k change · n/p hunk · v select · u unstage · d discard · m layout · c commit · ? help · q quit "
+            " j/k change · n/p hunk · v select · space/u unstage · d discard · m layout · c commit · ? help · q quit "
         }
     }
 }

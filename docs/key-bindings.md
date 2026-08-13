@@ -48,8 +48,8 @@ The box title shows how many files the commit will contain.
 | `g` `G`                 | Jump to the first / last changed line    |
 | `n` `p`                 | Jump to the next / previous hunk         |
 | `v`                     | Start or end a visual line selection     |
-| `s`                     | Stage the hunk (or the selected lines)   |
-| `u`                     | Unstage the hunk (or the selected lines) |
+| `s` / `Space`           | Stage the hunk (or the selected lines)   |
+| `u` / `Space`           | Unstage the hunk (or the selected lines) |
 | `d`                     | Discard the hunk (or the selected lines), with confirmation |
 | `h` / `←`               | Back to the files pane                   |
 | `Esc`                   | Cancel the selection, then back to files |
