@@ -324,14 +324,14 @@ impl App {
                     self.focus = Focus::Files;
                 }
             }
-            (_, KeyCode::Char('s')) if self.side == Side::Unstaged => {
+            (_, KeyCode::Char('s' | ' ')) if self.side == Side::Unstaged => {
                 if self.pane().visual_anchor.is_some() {
                     self.stage_selected_lines();
                 } else {
                     self.stage_selected_hunk();
                 }
             }
-            (_, KeyCode::Char('u')) if self.side == Side::Staged => {
+            (_, KeyCode::Char('u' | ' ')) if self.side == Side::Staged => {
                 if self.pane().visual_anchor.is_some() {
                     self.unstage_selected_lines();
                 } else {
