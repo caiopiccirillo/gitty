@@ -14,9 +14,23 @@ use super::{App, DiffLine, Focus, LineKind, Mode, Node, Range, Side, tree};
 impl App {
     pub fn handle_key(&mut self, key: KeyEvent) {
         if self.help_open {
-            // The help overlay is modal: only a close key leaves it.
+            // The help overlay is modal: it scrolls, or a close key leaves
+            // it. The scroll is clamped against the viewport while
+            // rendering, which is where the overlay's height is known.
             match key.code {
-                KeyCode::Char('?' | 'q' | 'h') | KeyCode::Esc => self.help_open = false,
+                KeyCode::Char('?' | 'q' | 'h') | KeyCode::Esc => {
+                    self.help_open = false;
+                    self.help_scroll = 0;
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.help_scroll = self.help_scroll.saturating_add(1);
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.help_scroll = self.help_scroll.saturating_sub(1);
+                }
+                KeyCode::PageDown => self.help_scroll = self.help_scroll.saturating_add(10),
+                KeyCode::PageUp => self.help_scroll = self.help_scroll.saturating_sub(10),
+                KeyCode::Home | KeyCode::Char('g') => self.help_scroll = 0,
                 _ => {}
             }
             return;
@@ -29,17 +43,20 @@ impl App {
             self.handle_discard_key(key);
             return;
         }
+        // Letter bindings are plain-only, so a modified key never falls
+        // through to them: `Ctrl+C` must not also mean `c` (commit), and
+        // `Alt+q` must not quit.
+        let plain = is_plain(key.modifiers);
         match (key.modifiers, key.code) {
-            (_, KeyCode::Char('q')) | (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
-                self.should_quit = true;
-            }
-            (_, KeyCode::Char('?')) => self.help_open = true,
-            (_, KeyCode::Char('z')) => self.undo(),
+            (KeyModifiers::CONTROL, KeyCode::Char('c')) => self.should_quit = true,
+            (_, KeyCode::Char('q')) if plain => self.should_quit = true,
+            (_, KeyCode::Char('?')) if plain => self.help_open = true,
+            (_, KeyCode::Char('z')) if plain => self.undo(),
             (_, KeyCode::Tab) => self.cycle_focus(),
-            (_, KeyCode::Char('c')) => self.open_commit(),
-            (_, KeyCode::Char('m')) => self.toggle_mode(),
-            (_, KeyCode::Char('[')) => self.shrink_files_pane(),
-            (_, KeyCode::Char(']')) => self.grow_files_pane(),
+            (_, KeyCode::Char('c')) if plain => self.open_commit(),
+            (_, KeyCode::Char('m')) if plain => self.toggle_mode(),
+            (_, KeyCode::Char('[')) if plain => self.shrink_files_pane(),
+            (_, KeyCode::Char(']')) if plain => self.grow_files_pane(),
             _ => match self.focus {
                 Focus::Files => self.handle_files_key(key),
                 Focus::Diff => self.handle_diff_key(key),
@@ -233,6 +250,12 @@ impl App {
     }
 
     fn handle_files_key(&mut self, key: KeyEvent) {
+        // The files pane has no modified bindings. Without this guard the
+        // arms below match on `key.code` alone, so `Ctrl+D` — half a page
+        // in the diff pane — would open the discard prompt here.
+        if !is_plain(key.modifiers) {
+            return;
+        }
         match key.code {
             KeyCode::Down | KeyCode::Char('j') => self.move_row(1),
             KeyCode::Up | KeyCode::Char('k') => self.move_row(-1),
@@ -355,9 +378,12 @@ impl App {
     }
 
     fn handle_diff_key(&mut self, key: KeyEvent) {
+        // Ctrl+D / Ctrl+U are the only modified bindings here; every other
+        // arm is plain-only so `Alt+d` cannot reach the discard prompt.
+        let plain = is_plain(key.modifiers);
         match (key.modifiers, key.code) {
-            (_, KeyCode::Down | KeyCode::Char('j')) => self.move_cursor(1),
-            (_, KeyCode::Up | KeyCode::Char('k')) => self.move_cursor(-1),
+            (_, KeyCode::Down | KeyCode::Char('j')) if plain => self.move_cursor(1),
+            (_, KeyCode::Up | KeyCode::Char('k')) if plain => self.move_cursor(-1),
             (_, KeyCode::PageDown) => self.move_cursor(self.viewport_height as isize),
             (_, KeyCode::PageUp) => self.move_cursor(-(self.viewport_height as isize)),
             (KeyModifiers::CONTROL, KeyCode::Char('d')) => {
@@ -366,12 +392,12 @@ impl App {
             (KeyModifiers::CONTROL, KeyCode::Char('u')) => {
                 self.move_cursor(-(self.viewport_height as isize / 2));
             }
-            (_, KeyCode::Home | KeyCode::Char('g')) => self.move_to_edge(true),
-            (_, KeyCode::End | KeyCode::Char('G')) => self.move_to_edge(false),
-            (_, KeyCode::Char('n')) => self.jump_hunk(1),
-            (_, KeyCode::Char('p')) => self.jump_hunk(-1),
-            (_, KeyCode::Char('v')) => self.toggle_visual(),
-            (_, KeyCode::Left | KeyCode::Char('h')) => {
+            (_, KeyCode::Home | KeyCode::Char('g')) if plain => self.move_to_edge(true),
+            (_, KeyCode::End | KeyCode::Char('G')) if plain => self.move_to_edge(false),
+            (_, KeyCode::Char('n')) if plain => self.jump_hunk(1),
+            (_, KeyCode::Char('p')) if plain => self.jump_hunk(-1),
+            (_, KeyCode::Char('v')) if plain => self.toggle_visual(),
+            (_, KeyCode::Left | KeyCode::Char('h')) if plain => {
                 self.focus = Focus::Files;
             }
             (_, KeyCode::Esc) => {
@@ -381,21 +407,21 @@ impl App {
                     self.focus = Focus::Files;
                 }
             }
-            (_, KeyCode::Char('s' | ' ')) if self.side == Side::Unstaged => {
+            (_, KeyCode::Char('s' | ' ')) if plain && self.side == Side::Unstaged => {
                 if self.pane().visual_anchor.is_some() {
                     self.stage_selected_lines();
                 } else {
                     self.stage_selected_hunk();
                 }
             }
-            (_, KeyCode::Char('u' | ' ')) if self.side == Side::Staged => {
+            (_, KeyCode::Char('u' | ' ')) if plain && self.side == Side::Staged => {
                 if self.pane().visual_anchor.is_some() {
                     self.unstage_selected_lines();
                 } else {
                     self.unstage_selected_hunk();
                 }
             }
-            (_, KeyCode::Char('d')) => self.prompt_discard(),
+            (_, KeyCode::Char('d')) if plain => self.prompt_discard(),
             _ => {}
         }
     }
@@ -651,6 +677,12 @@ impl App {
 
 /// Positions of the changed lines (`+`/`-`) within a slice of displayed
 /// lines, in display order.
+/// Whether a key press carries no modifier that changes its meaning.
+/// `Shift` is allowed because it is how `G` and `?` reach us.
+fn is_plain(modifiers: KeyModifiers) -> bool {
+    modifiers.is_empty() || modifiers == KeyModifiers::SHIFT
+}
+
 fn changed_positions(lines: &[&DiffLine]) -> Vec<usize> {
     lines
         .iter()

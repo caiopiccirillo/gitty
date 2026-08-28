@@ -34,6 +34,11 @@ use crate::tree::{self, FileEntry, Node};
 /// How many undo snapshots are kept in memory (oldest dropped beyond this).
 const UNDO_LIMIT: usize = 64;
 
+/// How long a status message stays on screen. A message occupies the same
+/// slot as the key hints, so it has to give the slot back: without a TTL
+/// the first staged hunk would hide the hints for the rest of the session.
+pub const MESSAGE_TTL: Duration = Duration::from_secs(4);
+
 /// How long [`App::wait_for_refresh`] waits for a fresh snapshot before
 /// giving up. Generous, since it also has to cover a loaded CI machine:
 /// it exists to turn a stuck worker into a clear failure, not to measure
@@ -142,6 +147,8 @@ pub struct App {
     pub message: Option<Message>,
     /// Whether the `?` help overlay is open (modal).
     pub help_open: bool,
+    /// First visible line of the help overlay, clamped while rendering.
+    pub help_scroll: u16,
     /// Snapshots taken before each mutation, for `z` undo (oldest first).
     pub undo_stack: Vec<Vec<FileSnapshot>>,
     viewport_height: usize,
@@ -195,6 +202,7 @@ impl App {
             discard_confirm: None,
             message: None,
             help_open: false,
+            help_scroll: 0,
             undo_stack: Vec::new(),
             viewport_height: 0,
             repo_path,
@@ -769,6 +777,19 @@ impl App {
         Ok(())
     }
 
+    /// Retire a status message once it has been on screen for
+    /// [`MESSAGE_TTL`], handing the status bar back to the key hints
+    /// (called on idle ticks, so the hints return within one tick).
+    pub fn expire_message(&mut self) {
+        if self
+            .message
+            .as_ref()
+            .is_some_and(|m| m.shown_at.elapsed() >= MESSAGE_TTL)
+        {
+            self.message = None;
+        }
+    }
+
     /// Apply any finished background snapshot (called on idle ticks; cheap
     /// no-op when the channel is empty).
     pub fn poll_refresh(&mut self) {
@@ -851,9 +872,14 @@ impl App {
         }
     }
 
-    /// Commit the staged changes with the typed message and close the box.
+    /// Commit the staged changes with the typed message.
+    ///
+    /// The box is only closed once the commit succeeds. A rejected message
+    /// (empty) or a failed commit (no `user.email`, a locked index, ...)
+    /// leaves the box open with the text intact, so nothing the user typed
+    /// is ever lost to an error.
     pub fn commit(&mut self) {
-        let Some(input) = self.commit_input.take() else {
+        let Some(input) = self.commit_input.as_ref() else {
             return;
         };
         let message = input.text.trim().to_string();
@@ -863,6 +889,7 @@ impl App {
         }
         self.message = match git::commit(&self.repo_path, &message) {
             Ok(short) => {
+                self.commit_input = None;
                 self.schedule_refresh();
                 Some(Message::success(format!("committed {short}")))
             }
@@ -995,34 +1022,38 @@ pub enum Severity {
 }
 
 /// One-off feedback shown in the status bar (staging results, failures, ...).
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// A message hides the key hints while it is on screen, so it carries the
+/// instant it was raised and [`App::expire_message`] retires it after
+/// [`MESSAGE_TTL`].
+#[derive(Debug, Clone)]
 pub struct Message {
     pub text: String,
     pub severity: Severity,
+    pub shown_at: Instant,
 }
 
 impl Message {
     #[must_use]
     pub fn info(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            severity: Severity::Info,
-        }
+        Self::new(text, Severity::Info)
     }
 
     #[must_use]
     pub fn success(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            severity: Severity::Success,
-        }
+        Self::new(text, Severity::Success)
     }
 
     #[must_use]
     pub fn error(text: impl Into<String>) -> Self {
+        Self::new(text, Severity::Error)
+    }
+
+    fn new(text: impl Into<String>, severity: Severity) -> Self {
         Self {
             text: text.into(),
-            severity: Severity::Error,
+            severity,
+            shown_at: Instant::now(),
         }
     }
 }
@@ -1376,8 +1407,12 @@ mod tests {
         let mut app = test_app();
         press(&mut app, KeyCode::Char('?'));
         assert!(app.help_open);
-        // Any other key is ignored while the overlay is open.
+        // Keys are captured by the overlay: `j` scrolls it instead of
+        // moving the file selection, and everything else is ignored.
         press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.help_scroll, 1, "j scrolls the overlay");
+        press(&mut app, KeyCode::Char('k'));
+        assert_eq!(app.help_scroll, 0);
         press(&mut app, KeyCode::Char('c'));
         press(&mut app, KeyCode::Tab);
         assert!(app.help_open);
@@ -1394,6 +1429,52 @@ mod tests {
         press(&mut app, KeyCode::Char('?'));
         press(&mut app, KeyCode::Char('q'));
         assert!(!app.help_open);
+    }
+
+    #[test]
+    fn modified_keys_do_not_trigger_the_plain_bindings() {
+        let mut app = test_app();
+        // Ctrl+D is half a page in the diff pane; in the files pane the
+        // arms match on the key code alone, so without a modifier guard it
+        // would open the discard prompt.
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        assert!(
+            app.discard_confirm.is_none(),
+            "Ctrl+D must not discard in the files pane"
+        );
+        // Ctrl+J / Ctrl+K must not move the selection either.
+        app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL));
+        assert_eq!(app.selected_row, 0);
+        // Alt+Q must not quit; Ctrl+C still does.
+        app.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::ALT));
+        assert!(!app.should_quit);
+        app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn modified_keys_do_not_discard_in_the_diff_pane() {
+        let mut app = test_app();
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.focus, Focus::Diff);
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::ALT));
+        assert!(app.discard_confirm.is_none(), "Alt+D must not discard");
+        // Ctrl+D keeps its own meaning: half a page down.
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        assert!(app.discard_confirm.is_none());
+    }
+
+    #[test]
+    fn status_messages_expire() {
+        let mut app = test_app();
+        app.message = Some(Message::info("nothing to undo"));
+        app.expire_message();
+        assert!(app.message.is_some(), "a fresh message stays");
+
+        // Backdate it past the TTL: the status bar goes back to the hints.
+        app.message.as_mut().unwrap().shown_at -= MESSAGE_TTL;
+        app.expire_message();
+        assert!(app.message.is_none());
     }
 
     #[test]

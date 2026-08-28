@@ -188,3 +188,57 @@ fn empty_message_is_rejected() {
     );
     assert_eq!(app.staged.files.len(), 1);
 }
+
+#[test]
+fn a_rejected_message_keeps_the_box_open() {
+    let (dir, repo) = init_with_identity();
+    commit_file(&repo, dir.path(), "f.txt", BASE);
+    fs::write(dir.path().join("f.txt"), BASE.replacen("l1", "L1", 1)).unwrap();
+    let mut app = App::load(dir.path()).unwrap();
+
+    press(&mut app, KeyCode::Char(' '));
+    app.wait_for_refresh();
+    press(&mut app, KeyCode::Char('c'));
+    // Only whitespace: rejected, but the box stays open so the user can
+    // keep typing instead of starting over.
+    press(&mut app, KeyCode::Char(' '));
+    press(&mut app, KeyCode::Enter);
+    assert!(app.commit_input.is_some(), "the box stays open");
+    assert_eq!(
+        app.commit_input.as_ref().map(|i| i.text.as_str()),
+        Some(" "),
+        "the typed text survives"
+    );
+}
+
+#[test]
+fn a_failed_commit_keeps_the_typed_message() {
+    let (dir, repo) = init_with_identity();
+    commit_file(&repo, dir.path(), "f.txt", BASE);
+    fs::write(dir.path().join("f.txt"), BASE.replacen("l1", "L1", 1)).unwrap();
+    let mut app = App::load(dir.path()).unwrap();
+
+    press(&mut app, KeyCode::Char(' '));
+    app.wait_for_refresh();
+    // Break HEAD after the load so the commit — and only the commit —
+    // fails, the way a locked index or a missing identity would.
+    fs::write(dir.path().join(".git/HEAD"), "ref: refs/heads/\n").unwrap();
+    press(&mut app, KeyCode::Char('c'));
+    for c in "a real message".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    press(&mut app, KeyCode::Enter);
+
+    assert!(
+        app.message
+            .as_ref()
+            .is_some_and(|m| m.severity == Severity::Error && m.text.starts_with("commit failed")),
+        "the failure is reported: {:?}",
+        app.message
+    );
+    assert_eq!(
+        app.commit_input.as_ref().map(|i| i.text.as_str()),
+        Some("a real message"),
+        "the message the user typed is not lost to the failure"
+    );
+}
