@@ -23,9 +23,9 @@ name = "gitty"
 anyhow = "1.0.104"
 gix = { version = "0.87", default-features = false, features = ["status", "sha1"] }
 ratatui = "0.30.2"
-tree-sitter = { version = "0.25", optional = true }
+tree-sitter = { version = "0.26", optional = true }
 tree-sitter-json = { version = "0.24", optional = true }
-tree-sitter-python = { version = "0.23", optional = true }
+tree-sitter-python = { version = "0.25", optional = true }
 tree-sitter-rust = { version = "0.24", optional = true }
 
 [features]
