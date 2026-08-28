@@ -141,9 +141,9 @@ pub struct App {
     pub commit_input: Option<CommitInput>,
     /// A destructive discard awaiting confirmation (`d` then `y`).
     pub discard_confirm: Option<DiscardPrompt>,
-    /// One-off feedback shown in the status bar (e.g. staging results). It
-    /// persists until the next operation, so failures stay visible while
-    /// the user navigates.
+    /// One-off feedback shown in the status bar (e.g. staging results).
+    /// Retired by [`App::expire_message`] after [`MESSAGE_TTL`], because it
+    /// occupies the same slot as the key hints.
     pub message: Option<Message>,
     /// Whether the `?` help overlay is open (modal).
     pub help_open: bool,
@@ -999,7 +999,7 @@ fn execute_discard(repo_path: &Path, action: DiscardAction) -> Result<()> {
     Ok(())
 }
 
-/// Path-based identity of a tree row (see [`App::refresh`]).
+/// Path-based identity of a tree row (see [`App::apply_refreshed`]).
 enum NodeIdentity {
     Dir(String),
     File(String),

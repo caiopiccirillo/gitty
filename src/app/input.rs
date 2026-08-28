@@ -675,14 +675,14 @@ impl App {
     }
 }
 
-/// Positions of the changed lines (`+`/`-`) within a slice of displayed
-/// lines, in display order.
 /// Whether a key press carries no modifier that changes its meaning.
 /// `Shift` is allowed because it is how `G` and `?` reach us.
 fn is_plain(modifiers: KeyModifiers) -> bool {
     modifiers.is_empty() || modifiers == KeyModifiers::SHIFT
 }
 
+/// Positions of the changed lines (`+`/`-`) within a slice of displayed
+/// lines, in display order.
 fn changed_positions(lines: &[&DiffLine]) -> Vec<usize> {
     lines
         .iter()
