@@ -73,7 +73,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
     frame.render_widget(status_bar(app), status_area);
     if app.help_open {
-        render_help(frame);
+        render_help(frame, app);
     } else if let Some(ref input) = app.commit_input {
         render_commit_box(frame, input, app.staged.files.len());
     }
@@ -154,10 +154,16 @@ const HELP_LINES: &[&str] = &[
 ];
 
 /// The centered `?` help overlay with all key bindings.
-fn render_help(frame: &mut Frame) {
+///
+/// The overlay never grows past the frame: at 80x24 — the size the help is
+/// most needed at — the full list does not fit, so it scrolls with `j`/`k`
+/// and the title says so. `app.help_scroll` is clamped here, where the
+/// viewport height is known.
+fn render_help(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
-    let height = u16::try_from(HELP_LINES.len()).unwrap_or(u16::MAX) + 2;
-    let width = 74.min(area.width.saturating_sub(2));
+    let wanted = u16::try_from(HELP_LINES.len()).unwrap_or(u16::MAX) + 2;
+    let height = wanted.min(area.height);
+    let width = 74.min(area.width);
     let rect = Rect::new(
         area.x + area.width.saturating_sub(width) / 2,
         area.y + area.height.saturating_sub(height) / 2,
@@ -165,13 +171,25 @@ fn render_help(frame: &mut Frame) {
         height,
     );
     frame.render_widget(Clear, rect);
+
+    let viewport = rect.height.saturating_sub(2);
+    let max_scroll = u16::try_from(HELP_LINES.len())
+        .unwrap_or(u16::MAX)
+        .saturating_sub(viewport);
+    app.help_scroll = app.help_scroll.min(max_scroll);
+
+    let title = if max_scroll > 0 {
+        " Help (j/k scroll · ? or q to close) "
+    } else {
+        " Help (? or q to close) "
+    };
     let block = Block::bordered()
-        .title(" Help (? or q to close) ")
+        .title(title)
         .border_style(Style::new().fg(theme::PANE_BORDER_FOCUSED));
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
     let lines: Vec<Line> = HELP_LINES.iter().copied().map(Line::from).collect();
-    frame.render_widget(Paragraph::new(lines), inner);
+    frame.render_widget(Paragraph::new(lines).scroll((app.help_scroll, 0)), inner);
 }
 
 /// The centered commit-message box, with the terminal cursor inside it. The
@@ -1134,6 +1152,46 @@ mod tests {
         assert!(screen.contains("Diff pane"));
         assert!(screen.contains("Commit box"));
         assert!(screen.contains("Stage or unstage the selected file"));
+    }
+
+    #[test]
+    fn help_overlay_fits_and_scrolls_at_80x24() {
+        let mut app = sample_app();
+        press(&mut app, KeyCode::Char('?'));
+
+        // 24 rows cannot hold the whole list, so the overlay says it
+        // scrolls and the later sections are off-screen at first.
+        let (screen, _) = render_app(&mut app, 80, 24);
+        assert!(
+            screen.contains("j/k scroll"),
+            "the overlay advertises the scroll"
+        );
+        assert!(screen.contains("Global"));
+        assert!(!screen.contains("Commit box"), "the tail is below the fold");
+
+        // Scrolling reaches the last section instead of clipping it away.
+        for _ in 0..HELP_LINES.len() {
+            press(&mut app, KeyCode::Char('j'));
+        }
+        let (screen, _) = render_app(&mut app, 80, 24);
+        assert!(
+            screen.contains("Commit box"),
+            "the last section is reachable"
+        );
+    }
+
+    #[test]
+    fn the_hints_return_once_a_message_expires() {
+        let mut app = sample_app();
+        app.message = Some(crate::app::Message::success("staged hunk 1 of a.txt"));
+        let (screen, _) = render_app(&mut app, 200, 10);
+        assert!(screen.contains("staged hunk 1 of a.txt"));
+        assert!(!screen.contains("? help"), "the message hides the hints");
+
+        app.message.as_mut().unwrap().shown_at -= crate::app::MESSAGE_TTL;
+        app.expire_message();
+        let (screen, _) = render_app(&mut app, 200, 10);
+        assert!(screen.contains("? help"), "the hints come back");
     }
 
     #[test]

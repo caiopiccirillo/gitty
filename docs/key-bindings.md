@@ -12,6 +12,14 @@
 | `[` / `]`      | Narrow / widen the files pane       |
 | `z`            | Undo the last staging or discard    |
 
+The help overlay scrolls with `j`/`k` (and `PgUp`/`PgDn`, `g`) when the
+terminal is too short to show every binding at once; the title says so when
+it does. `?`, `q`, `h` and `Esc` close it.
+
+Letter bindings are plain-only: a key pressed with `Ctrl` or `Alt` never
+triggers them, so `Ctrl+D` is half a page in the diff pane and does nothing
+in the files pane.
+
 ## Commit message box
 
 | Key                   | Action                       |
@@ -25,7 +33,9 @@
 | `Ctrl+K`              | Delete to the end of the line|
 | `Ctrl+U`              | Clear the whole message      |
 
-The box title shows how many files the commit will contain.
+The box title shows how many files the commit will contain. The box only
+closes once the commit succeeds: an empty message or a failed commit leaves
+it open with the text intact.
 
 ## Files pane
 
