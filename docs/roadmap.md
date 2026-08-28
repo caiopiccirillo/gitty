@@ -43,8 +43,10 @@ The feasibility claims below were checked against the installed `gix`
 - Staging and unstaging of files, directories, hunks and lines.
 - Discarding changes (worktree and index) with confirmation.
 - Committing from the TUI (single-line message, no hooks).
+- Undo of the last staging, unstaging or discard (`z`), session-scoped
+  (the last 64 mutations).
 - Two layouts, mouse support, optional syntax highlighting, background
-  refresh.
+  refresh, help overlay, resizable panes.
 
 ## Phase 0: Foundation (do first)
 
@@ -55,8 +57,8 @@ nothing depends on the larger phases.
 | ---- | --- | ------ |
 | CLI arguments: `--help`, `--version`, bad-argument handling | The published binary currently ignores arguments it doesn't understand | S |
 | Run git hooks around commits (`pre-commit`, `commit-msg`, `prepare-commit-msg`, `post-commit`) | gitty creates commits without running hooks, which silently breaks hook-based workflows | M |
-| Multi-line commit message editor | Commits deserve proper messages, not one line | M |
-| `commit --amend` (message and staged changes) | One of the most common corrections | S |
+| Multi-line commit message editor | Commits deserve proper messages, not one line. Build it as a commit panel: editor plus a staged-files summary and a preview of the resulting diff | M |
+| `commit --amend` (message and staged changes) | One of the most common corrections; an amend toggle inside the commit panel | S |
 | Commit message template (`commit.template`) | Cheap, pairs with the editor work | S |
 | Document the two known edge cases (staged-hunk discard alignment, trailing-newline hunks) | Users should know the limits before relying on them | S |
 
@@ -74,7 +76,24 @@ fully feasible.
 | Copy a commit id, check out a commit | Small but constantly needed | S |
 | Filter the log (author, message, path) | Search, like `git log --grep` | M |
 
-## Phase 2: Branches and the daily loop
+## Phase 2: Interface
+
+The interface work is gated on Phase 1: the layout has to accommodate the
+log, commit and branch panes before a final design can be drawn. Items
+marked *(any time)* don't depend on the layout and can land
+opportunistically during earlier phases.
+
+| Item | Why | Effort |
+| ---- | --- | ------ |
+| Status bar split: persistent state line + transient message line | Today context, hints, prompts and errors share one line and messages vanish on the next operation | S *(any time)* |
+| 256-color, background-aware theme engine (light and dark variants) | The palette is fixed 16 ANSI colors; themes are layout-agnostic | M *(any time)* |
+| File filter in the files pane (`/`) | File lists outgrow working memory quickly (Miller's law) | S |
+| Command palette (`:` fuzzy search over every action) | One discoverable entry point instead of context-dependent hint lines | M |
+| Staged-state gutter column in the diff pane | Shows per-hunk staged state without switching focus | M |
+| Word-level diff highlighting inside changed lines | Reuses the tree-sitter engine for intra-line diffs | M |
+| Adaptive single layout (split by default, degraded when narrow) | Replaces the classic/split toggle; reopens the collapsing-panes behavior described in `status.md` | L |
+
+## Phase 3: Branches and the daily loop
 
 With history visible, branches become actionable.
 
@@ -87,7 +106,7 @@ With history visible, branches become actionable.
 | Reflog view | Needed later for undo | M |
 | `push` | **blocked**: gitoxide has no push | - |
 
-## Phase 3: Index and worktree surgery
+## Phase 4: Index and worktree surgery
 
 The phase closest to gitty's soul: manipulating what is staged and what is
 kept, and surviving merge conflicts.
@@ -99,11 +118,11 @@ kept, and surviving merge conflicts.
 | Merge with conflict resolution | gitoxide has three-way blob and tree merge; navigating and resolving conflicts in the TUI is the hard part | L |
 | Cherry-pick | **blocked**: no sequencer in gitoxide (`gix-cherry-pick` is unpublished); a manual diff-and-apply version is possible but fragile | L |
 
-## Phase 4: Stretch goals
+## Phase 5: Stretch goals
 
 | Item | Why | Effort |
 | ---- | --- | ------ |
-| Undo / redo (reflog based, like lazygit) | Safety net for the destructive operations | L |
+| Undo / redo (reflog based, like lazygit) | The snapshot-based `z` undo is session-scoped; a reflog-based one survives restarts and covers whole commands | L |
 | Blame view | gitoxide's blame is early plumbing, so expect rough edges | M |
 | Worktree creation | gitoxide can read worktrees but not create them yet | L |
 | Submodule status in the file tree | gitty currently skips submodules | M |
@@ -119,11 +138,14 @@ kept, and surviving merge conflicts.
 
 ## Suggested order of work
 
-1. Phase 0, released as 0.4.0 (correctness and CLI polish).
+1. Phase 0, released as 0.4.0 (correctness, CLI polish and the commit
+   panel; the session-scoped `z` undo ships with it).
 2. Phase 1, released as 0.5.0 (history: log, show, diff commits).
-3. Phase 2 as 0.6.0 (branches, tags, fetch).
-4. Phase 3 as 0.7.0 (stash, reset, merge conflicts).
-5. Phase 4 only if the earlier phases hold up and users ask for it.
+3. Phase 2 interface items marked *(any time)* land opportunistically
+   during 0.4/0.5; the layout work starts once the history panes exist.
+4. Phase 3 as 0.6.0 (branches, tags, fetch).
+5. Phase 4 as 0.7.0 (stash, reset, merge conflicts).
+6. Phase 5 only if the earlier phases hold up and users ask for it.
 
 Each phase ends with a release and a round of feedback. The tool stays
 usable at every step, and the experimental status is revisited as the
