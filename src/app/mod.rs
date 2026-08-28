@@ -18,7 +18,8 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::sync::mpsc::RecvTimeoutError;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use ratatui::layout::Rect;
@@ -32,6 +33,12 @@ use crate::tree::{self, FileEntry, Node};
 
 /// How many undo snapshots are kept in memory (oldest dropped beyond this).
 const UNDO_LIMIT: usize = 64;
+
+/// How long [`App::wait_for_refresh`] waits for a fresh snapshot before
+/// giving up. Generous, since it also has to cover a loaded CI machine:
+/// it exists to turn a stuck worker into a clear failure, not to measure
+/// anything.
+const REFRESH_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Which side of the staging area is focused (and, in the classic layout,
 /// which one is shown).
@@ -787,19 +794,44 @@ impl App {
     /// applies it within a frame. Unlike `poll_refresh` this applies even
     /// during a visual selection, since the caller just finished its own
     /// mutation.
+    ///
+    /// The whole wait is bounded by [`REFRESH_WAIT_TIMEOUT`], not each
+    /// receive, so a stream of stale snapshots cannot extend it.
+    ///
+    /// # Panics
+    /// Panics if no fresh snapshot arrives in time, or if the worker
+    /// stopped. Returning quietly instead would let the caller continue
+    /// against stale diffs, which surfaces as an unrelated assertion
+    /// failing somewhere further down — the failure has to name its own
+    /// cause.
     pub fn wait_for_refresh(&mut self) {
+        self.wait_for_refresh_within(REFRESH_WAIT_TIMEOUT);
+    }
+
+    /// [`Self::wait_for_refresh`] with an explicit budget, so the tests can
+    /// reach the give-up paths without waiting out the real one.
+    fn wait_for_refresh_within(&mut self, timeout: Duration) {
         let Some(worker) = &self.refresh else {
             return;
         };
+        let deadline = Instant::now() + timeout;
         loop {
-            let Ok(outcome) = worker.rx.recv_timeout(Duration::from_secs(10)) else {
-                return;
-            };
-            if outcome.epoch < self.epoch.load(Ordering::SeqCst) {
-                continue; // stale, computed before the last mutation
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match worker.rx.recv_timeout(remaining) {
+                Ok(outcome) => {
+                    if outcome.epoch < self.epoch.load(Ordering::SeqCst) {
+                        continue; // stale, computed before the last mutation
+                    }
+                    self.apply_refreshed(outcome.unstaged, outcome.staged);
+                    return;
+                }
+                Err(RecvTimeoutError::Timeout) => panic!(
+                    "no fresh diff snapshot within {timeout:?}: the refresh worker is stuck or starved"
+                ),
+                Err(RecvTimeoutError::Disconnected) => {
+                    panic!("the refresh worker stopped before producing a fresh diff snapshot")
+                }
             }
-            self.apply_refreshed(outcome.unstaged, outcome.staged);
-            return;
         }
     }
 
@@ -1315,6 +1347,28 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.focus, Focus::Diff);
         assert_eq!(app.current_hunk(), Some(hunk(1, 0)), "still on b.txt");
+    }
+
+    #[test]
+    #[should_panic(expected = "the refresh worker is stuck or starved")]
+    fn wait_for_refresh_reports_a_stuck_worker() {
+        let mut app = test_app();
+        // The sender stays alive, so the channel is open but silent: the
+        // wait must give up loudly instead of returning against the diffs
+        // the caller already has.
+        let (worker, _keep_open) = refresh::detached();
+        app.refresh = Some(worker);
+        app.wait_for_refresh_within(Duration::from_millis(10));
+    }
+
+    #[test]
+    #[should_panic(expected = "the refresh worker stopped")]
+    fn wait_for_refresh_reports_a_dead_worker() {
+        let mut app = test_app();
+        let (worker, tx) = refresh::detached();
+        drop(tx); // the worker thread died
+        app.refresh = Some(worker);
+        app.wait_for_refresh_within(Duration::from_millis(10));
     }
 
     #[test]

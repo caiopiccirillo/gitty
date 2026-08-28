@@ -44,6 +44,18 @@ impl RefreshWorker {
     }
 }
 
+/// A worker handle with no thread behind it, plus the sender feeding it.
+/// Holding the sender makes a receive block until it times out; dropping
+/// it disconnects the channel — the two ways [`crate::app::App::
+/// wait_for_refresh`] can fail to get a snapshot.
+#[cfg(test)]
+#[must_use]
+pub fn detached() -> (RefreshWorker, Sender<RefreshOutcome>) {
+    let (poke, _) = mpsc::channel();
+    let (tx, rx) = mpsc::channel();
+    (RefreshWorker { rx, poke }, tx)
+}
+
 /// Spawn the background worker. The returned channel yields a snapshot
 /// whenever the diffs change; the worker exits once the app is dropped.
 pub fn spawn(repo_path: PathBuf, epoch: Arc<AtomicU64>) -> RefreshWorker {
