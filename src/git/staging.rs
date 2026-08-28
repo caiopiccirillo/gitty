@@ -390,7 +390,7 @@ fn replace_index_blob(
     if content.is_empty() && remove_when_empty {
         index.remove_entry_at_index(idx);
     } else {
-        index.entries_mut()[idx].id = blob_id;
+        point_entry_at(&mut index.entries_mut()[idx], blob_id);
     }
     index.write(gix::index::write::Options::default())?;
     Ok(())
@@ -456,7 +456,7 @@ pub fn unstage_file(path: &Path, file: &FileInfo) -> Result<()> {
                 .ok()
                 .context("staged file not in index")?;
             let entry = &mut index.entries_mut()[idx];
-            entry.id = id;
+            point_entry_at(entry, id);
             entry.mode = mode;
         }
         None => {
@@ -499,7 +499,7 @@ fn apply_to_index(
         if new_content.is_empty() && remove_when_empty {
             index.remove_entry_at_index(idx);
         } else {
-            index.entries_mut()[idx].id = blob_id;
+            point_entry_at(&mut index.entries_mut()[idx], blob_id);
         }
     } else {
         // Untracked file being staged: add a fresh entry with the
@@ -520,6 +520,19 @@ fn worktree_file_missing(repo: &gix::Repository, rela: &BStr) -> bool {
         Some(workdir) => !workdir.join(gix::path::from_bstr(rela)).exists(),
         None => true,
     }
+}
+
+/// Point an existing index entry at `id` and drop its cached stat.
+///
+/// The stat records the worktree file the entry was last known to match.
+/// Once the entry holds a blob we built ourselves — a spliced hunk, or
+/// HEAD's version on an unstage — that no longer holds, and a stat left in
+/// place lets the index/worktree comparison skip reading the file and
+/// report the remaining changes as absent. Zeroing it is what
+/// `git apply --cached` writes, and it forces the content comparison.
+fn point_entry_at(entry: &mut gix::index::Entry, id: gix::ObjectId) {
+    entry.id = id;
+    entry.stat = gix::index::entry::Stat::default();
 }
 
 /// Insert a fresh entry, or update an existing one in place.
